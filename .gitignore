@@ -1,0 +1,31 @@
+# Build
+/build/
+build*/
+*.o
+*.a
+*.so
+*.dylib
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+
+# Data, prepared columns, results, plots (regenerated)
+/data/raw/
+/data/prepared/
+/experiments/results/
+/experiments/plots/
+/experiments/workloads/reservoirs/
+*.bin
+
+# Truth and large CSVs are regenerated (keep tiny fixtures under tests/)
+/experiments/truth/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
