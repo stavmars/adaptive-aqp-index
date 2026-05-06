@@ -14,3 +14,4 @@ function(a3i_add_test name)
 endfunction()
 
 a3i_add_test(a3i_sanity_test test_sanity.cpp)
+a3i_add_test(test_storage   test_storage.cpp)

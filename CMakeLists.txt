@@ -20,13 +20,14 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 # ---- Core library --------------------------------------------------------
-# INTERFACE target centralizing include paths and language settings;
-# compiled units are added as the project grows.
-add_library(a3i_core INTERFACE)
-target_include_directories(a3i_core INTERFACE
+# Static library carrying compiled units shared by apps and tests.
+add_library(a3i_core STATIC
+    src/storage/index_table.cpp
+)
+target_include_directories(a3i_core PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
 )
-target_compile_features(a3i_core INTERFACE cxx_std_20)
+target_compile_features(a3i_core PUBLIC cxx_std_20)
 
 # ---- Apps ----------------------------------------------------------------
 add_executable(a3i_sanity apps/a3i_sanity.cpp)
