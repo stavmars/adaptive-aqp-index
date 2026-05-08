@@ -211,9 +211,9 @@ TEST(DatasetSchema, HoldsCallerSuppliedFields) {
     EXPECT_EQ(schema.binary_manifest_path, "/tmp/manifest.json");
 }
 
-TEST(Types, IdWidthsMatchSpec) {
-    // SPEC §5.3 / §6 pins the id widths; lock them down so a typo on one
-    // platform does not silently change the storage layout.
+TEST(Types, IdWidthsAreFixed) {
+    // Id widths are fixed by the storage layout; lock them down so a typo
+    // on one platform does not silently corrupt on-disk files.
     static_assert(sizeof(a3i::RowId) == 4, "RowId must be 32-bit");
     static_assert(sizeof(a3i::IndexPos) == 4, "IndexPos must be 32-bit");
     static_assert(sizeof(a3i::PartitionId) == 4, "PartitionId must be 32-bit");
