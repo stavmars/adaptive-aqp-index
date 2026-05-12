@@ -54,6 +54,8 @@ add_library(a3i_core STATIC
     src/storage/binary_column_store.cpp
     src/tools/csv_to_columns_pipeline.cpp
     src/experiments/truth_store.cpp
+    src/access_path/substrate_factory.cpp
+    src/substrates/adaptive_kd_access_path.cpp
 )
 target_include_directories(a3i_core PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
