@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "a3i/access_path/adaptive_access_path.hpp"
@@ -31,7 +32,7 @@ public:
     void prepare(IndexTable& table) override;
     void ensure_built() override;
     QueryPartitionSet locate(const HyperRect& q) const override;
-    std::vector<PartitionId> refine(const HyperRect& q, IndexTable& table) override;
+    RefineResult refine(const HyperRect& q, IndexTable& table) override;
     PartitionView partition(PartitionId id) const override;
     std::vector<PartitionId> active_partitions() const override;
     std::optional<PartitionId> parent(PartitionId id) const override;
@@ -55,6 +56,30 @@ private:
 
     // Walk the live structure for `q`, classifying each active leaf.
     void descend(PartitionId id, const HyperRect& q, QueryPartitionSet& out) const;
+
+    // In-place Hoare two-pointer partition of positions [start, end) on one
+    // axis about `pivot`: points with coordinate < pivot are moved before
+    // those >= pivot, each swap carrying its row_id. Returns the first
+    // position of the >= group (== start or == end when every point lands
+    // on one side, i.e. a failed crack).
+    IndexPos hoare_partition(IndexPos start, IndexPos end, DimensionId axis,
+                             double pivot);
+
+    // Split leaf `id` about (axis, pivot): partition its range, and on a
+    // successful crack create the two leaf children, retire the parent, and
+    // return their ids {left (< pivot), right (>= pivot)}. Returns nullopt on
+    // a failed crack (the node stays an unchanged leaf).
+    std::optional<std::pair<PartitionId, PartitionId>>
+    crack_node(PartitionId id, DimensionId axis, double pivot);
+
+    // Isolate q from one boundary leaf: crack at each axis lower bound
+    // (descending into the >= child) then each upper bound (descending into
+    // the < child), stopping as soon as the surviving boundary child is no
+    // larger than the refinement threshold. Appends every retired parent id
+    // and returns the id of the surviving boundary child (== `id` if no
+    // crack succeeded). Every discarded child lies wholly outside q.
+    PartitionId crack_partition_to_query(PartitionId id, const HyperRect& q,
+                                         std::vector<PartitionId>& retired);
 
     SubstrateConfig    config_;
     IndexTable*        table_ = nullptr;   ///< Non-owning; prepared at load time.

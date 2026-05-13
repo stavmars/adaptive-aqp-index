@@ -50,10 +50,13 @@ public:
     virtual QueryPartitionSet locate(const HyperRect& q) const = 0;
 
     /// Refine the structure for `q` by splitting boundary partitions whose
-    /// size exceeds the substrate's threshold, returning the ids of parents
+    /// size exceeds the substrate's threshold. Returns the ids of parents
     /// that retired in the process (their summaries are retained by the
-    /// caller). Never reads measures.
-    virtual std::vector<PartitionId> refine(const HyperRect& q, IndexTable& table) = 0;
+    /// caller) together with the post-refinement classification of the
+    /// active frontier against `q`, so the caller need not walk the
+    /// structure again to re-derive what `locate(q)` would now report.
+    /// Never reads measures.
+    virtual RefineResult refine(const HyperRect& q, IndexTable& table) = 0;
 
     /// Snapshot of a partition by id; valid for retired ids too
     /// (`active == false`).

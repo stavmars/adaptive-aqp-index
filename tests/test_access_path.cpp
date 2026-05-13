@@ -130,8 +130,8 @@ TEST(AdaptiveKdAccessPath, RefineRetiresNothing) {
     AdaptiveKdAccessPath path(config());
     path.prepare(table);
     path.ensure_built();
-    auto retired = path.refine(HyperRect{{{2.0, 6.0}, {2.0, 6.0}}}, table);
-    EXPECT_TRUE(retired.empty());
+    auto rr = path.refine(HyperRect{{{2.0, 6.0}, {2.0, 6.0}}}, table);
+    EXPECT_TRUE(rr.retired.empty());
     EXPECT_EQ(path.active_partitions().size(), 1u);
 }
 
