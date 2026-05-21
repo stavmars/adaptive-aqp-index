@@ -58,6 +58,9 @@ add_library(a3i_core STATIC
     src/substrates/kd_tree.cpp
     src/substrates/adaptive_kd_access_path.cpp
     src/substrates/static_kd_access_path.cpp
+    src/aqp/summary.cpp
+    src/aqp/partition_state_store.cpp
+    src/aqp/prior_stats.cpp
 )
 target_include_directories(a3i_core PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>

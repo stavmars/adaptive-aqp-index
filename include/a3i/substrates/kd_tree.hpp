@@ -57,7 +57,10 @@ public:
     /// Read-only view of a node, valid for retired ids too (active = false).
     PartitionView partition(PartitionId id) const;
 
-    /// Ids of the live (active leaf) partitions.
+    /// Ids of the live (active leaf) partitions. Scans every node and
+    /// allocates a fresh vector, so its cost grows with the total node count
+    /// (live + retired). Intended for enumeration and tests; do NOT call it
+    /// on a per-query path. Per-query strata come from locate()/refine().
     std::vector<PartitionId> active_partitions() const;
 
     /// Parent id of a node, or nullopt for the root.
