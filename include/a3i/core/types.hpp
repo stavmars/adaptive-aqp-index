@@ -27,4 +27,9 @@ using MeasureId = std::uint16_t;
 /// Index into the schema's dimension columns.
 using DimensionId = std::uint16_t;
 
+/// Per-round index identifying a stratum within one sampling round; used to
+/// route a gathered measure value back to its accumulators. Local to a
+/// round, no persistent meaning.
+using StratumTag = std::uint16_t;
+
 }  // namespace a3i

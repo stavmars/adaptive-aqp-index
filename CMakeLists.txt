@@ -61,6 +61,8 @@ add_library(a3i_core STATIC
     src/aqp/summary.cpp
     src/aqp/partition_state_store.cpp
     src/aqp/prior_stats.cpp
+    src/aqp/sampler.cpp
+    src/aqp/stratum_cursor.cpp
 )
 target_include_directories(a3i_core PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
