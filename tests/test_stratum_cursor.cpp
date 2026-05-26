@@ -5,6 +5,7 @@
 #include <utility>
 #include <vector>
 
+#include "a3i/aqp/position_bitset.hpp"
 #include "a3i/aqp/stratum_cursor.hpp"
 #include "a3i/aqp/summary.hpp"
 #include "a3i/core/types.hpp"
@@ -86,7 +87,10 @@ TEST(StratumCursor, SampledRoundsAreCumulative) {
 TEST(StratumCursor, QueryLocalFullReadsQualifyingPositions) {
     const IndexTable table = make_table();
     SampleTracker tracker(5);
-    const std::vector<IndexPos> qualifying{0, 2, 4};  // row ids 50, 30, 40
+    PositionBitset qualifying(5);  // partition-local positions 0, 2, 4
+    qualifying.set(0);             // row id 50
+    qualifying.set(2);             // row id 30
+    qualifying.set(4);             // row id 40
     StratumCursor cur =
         make_query_local_full_cursor(table, 0, qualifying, tracker, 1);
 

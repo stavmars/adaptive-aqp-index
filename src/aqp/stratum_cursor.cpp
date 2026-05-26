@@ -55,27 +55,26 @@ StratumCursor make_reusable_sampled_cursor(const IndexTable& table,
                                            std::uint64_t count, Rng& rng,
                                            StratumTag tag) {
     std::vector<IndexPos> positions =
-        Sampler::draw_from_range(size, tracker, count, rng);
+        Sampler::draw({size, /*qualifying=*/nullptr}, tracker, count, rng);
     mark_all(tracker, positions);
     return build_cursor(table, begin, positions, tag);
 }
 
 StratumCursor make_query_local_full_cursor(const IndexTable& table,
                                            IndexPos begin,
-                                           std::span<const IndexPos> qualifying,
+                                           const PositionBitset& qualifying,
                                            SampleTracker& tracker,
                                            StratumTag tag) {
-    std::vector<IndexPos> positions(qualifying.begin(), qualifying.end());
+    std::vector<IndexPos> positions = qualifying.to_positions();
     mark_all(tracker, positions);
     return build_cursor(table, begin, positions, tag);
 }
 
 StratumCursor make_query_local_sampled_cursor(
-    const IndexTable& table, IndexPos begin,
-    std::span<const IndexPos> qualifying, SampleTracker& tracker,
-    std::uint64_t count, Rng& rng, StratumTag tag) {
+    const IndexTable& table, IndexPos begin, const PositionBitset& qualifying,
+    SampleTracker& tracker, std::uint64_t count, Rng& rng, StratumTag tag) {
     std::vector<IndexPos> positions =
-        Sampler::draw_from_bitset(qualifying, tracker, count, rng);
+        Sampler::draw({qualifying.size(), &qualifying}, tracker, count, rng);
     mark_all(tracker, positions);
     return build_cursor(table, begin, positions, tag);
 }

@@ -32,6 +32,7 @@
 #include <span>
 #include <vector>
 
+#include "a3i/aqp/position_bitset.hpp"
 #include "a3i/aqp/summary.hpp"
 #include "a3i/core/types.hpp"
 #include "a3i/storage/index_table.hpp"
@@ -64,19 +65,20 @@ StratumCursor make_reusable_sampled_cursor(const IndexTable& table,
                                            StratumTag tag);
 
 /// Query-local stratum, full read: reads every qualifying position and marks
-/// each in the query-local tracker.
+/// each in the query-local tracker. Qualifying positions are partition-local
+/// (offsets from `begin`); the tracker shares that coordinate space.
 StratumCursor make_query_local_full_cursor(const IndexTable& table,
                                            IndexPos begin,
-                                           std::span<const IndexPos> qualifying,
+                                           const PositionBitset& qualifying,
                                            SampleTracker& tracker,
                                            StratumTag tag);
 
 /// Query-local stratum, sampled read: draws `count` new positions without
-/// replacement from `qualifying` \ tracker, marks them in the tracker.
+/// replacement from the qualifying set minus the tracker, marks them in the
+/// tracker.
 StratumCursor make_query_local_sampled_cursor(
-    const IndexTable& table, IndexPos begin,
-    std::span<const IndexPos> qualifying, SampleTracker& tracker,
-    std::uint64_t count, Rng& rng, StratumTag tag);
+    const IndexTable& table, IndexPos begin, const PositionBitset& qualifying,
+    SampleTracker& tracker, std::uint64_t count, Rng& rng, StratumTag tag);
 
 /// Min-heap k-way merge over cursors, yielding row ids in ascending order with
 /// the originating stratum tag alongside each id. Cursors are referenced by
