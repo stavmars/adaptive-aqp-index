@@ -72,6 +72,13 @@ struct QueryMetrics {
     std::string   substrate;
     std::string   status;
     std::string   stop_reason;
+    // Why the residual was read in full, if it was: "none", when no
+    // exactification happened; "cheaper_to_exactify", when the next sampling
+    // round would have read more than half the remaining residual; or
+    // "gave_up", when planning stopped making progress or the round budget
+    // was spent. Recorded after the fact for analysis; it does not steer the
+    // control flow.
+    std::string   exactify_cause = "none";
     double latency_ms        = 0.0;
     double t_locate_ms       = 0.0;
     double t_decompose_ms    = 0.0;

@@ -29,7 +29,9 @@ using DimensionId = std::uint16_t;
 
 /// Per-round index identifying a stratum within one sampling round; used to
 /// route a gathered measure value back to its accumulators. Local to a
-/// round, no persistent meaning.
-using StratumTag = std::uint16_t;
+/// round, no persistent meaning. 32-bit because one query can touch as many
+/// strata as it has residual partitions, which fine-grained cracking can push
+/// past a 16-bit ceiling.
+using StratumTag = std::uint32_t;
 
 }  // namespace a3i

@@ -1,0 +1,358 @@
+#include "a3i/engine/query_engine.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
+#include "a3i/aqp/decompose.hpp"
+#include "a3i/aqp/stratum_cursor.hpp"
+#include "a3i/storage/manifest.hpp"
+#include "a3i/util/rng.hpp"
+
+namespace a3i {
+
+namespace {
+
+double max_relative_half_width(const std::vector<AggregateEstimate>& est) {
+    double worst = 0.0;
+    for (const AggregateEstimate& e : est) {
+        if (e.exact) continue;
+        worst = std::max(worst, e.relative_half_width);
+    }
+    return worst;
+}
+
+}  // namespace
+
+QueryEngine::QueryEngine(const BinaryColumnStore& store, IndexTable& table,
+                         AdaptiveAccessPath& access_path, EngineConfig config)
+    : store_(store),
+      table_(table),
+      access_path_(access_path),
+      config_(config),
+      measure_count_(store.measure_count()),
+      estimator_(),
+      allocator_(config.allocator) {
+    // Per-measure priors from the global statistics: the fraction of present
+    // values and the mean / standard deviation of those present.
+    global_priors_.resize(measure_count_);
+    for (MeasureId mid = 0; mid < measure_count_; ++mid) {
+        const GlobalMeasureStats& g = store_.global_stats(mid);
+        const std::uint64_t total = g.non_nan_count + g.nan_count;
+        StratumPrior prior;
+        prior.p = total > 0
+                      ? static_cast<double>(g.non_nan_count) /
+                            static_cast<double>(total)
+                      : 0.0;
+        if (g.non_nan_count > 0) {
+            prior.mu_nn = g.sum / static_cast<double>(g.non_nan_count);
+            const double mean_sq = g.sum_sq / static_cast<double>(g.non_nan_count);
+            const double var = mean_sq - prior.mu_nn * prior.mu_nn;
+            prior.sigma_nn = std::sqrt(std::max(0.0, var));
+        }
+        global_priors_[mid] = prior;
+        global_mean_abs_ = std::max(global_mean_abs_, std::abs(prior.mu_nn));
+    }
+}
+
+void QueryEngine::build_residual_partitions(const QueryDecomposition& decomp) {
+    residual_.clear();
+    ql_.clear();
+
+    std::unordered_map<PartitionId, std::size_t> seen;
+    for (const ReusableStratum& s : decomp.reusable_strata) {
+        if (seen.count(s.pid)) continue;
+        seen.emplace(s.pid, residual_.size());
+        ResidualPartition p;
+        p.reusable = true;
+        p.pid = s.pid;
+        p.begin = s.begin;
+        p.size = static_cast<std::uint32_t>(s.end - s.begin);
+        p.N = s.population_size;
+        p.tracker = s.tracker;
+        residual_.push_back(std::move(p));
+    }
+    for (const QueryLocalStratum& s : decomp.query_local_strata) {
+        if (ql_.count(s.pid)) continue;
+        QueryLocalState st;
+        st.moments.resize(measure_count_);
+        st.tracker = std::make_shared<SampleTracker>(s.qualifying->size());
+        auto [it, ok] = ql_.emplace(s.pid, std::move(st));
+        ResidualPartition p;
+        p.reusable = false;
+        p.pid = s.pid;
+        p.begin = s.begin;
+        p.size = static_cast<std::uint32_t>(s.qualifying->size());
+        p.qualifying = s.qualifying.get();
+        p.N = s.population_size;
+        p.tracker = it->second.tracker;
+        residual_.push_back(std::move(p));
+    }
+}
+
+std::uint64_t QueryEngine::sampled_count(const ResidualPartition& p) const {
+    if (p.reusable) {
+        const MeasureSummary* s = state_.find(p.pid, 0);
+        return s ? s->sampled_rows : 0;
+    }
+    return ql_.at(p.pid).sampled;
+}
+
+StratumSample QueryEngine::sample_for(const ResidualPartition& p,
+                                      MeasureId mid) const {
+    StratumSample s;
+    s.N = p.N;
+    if (p.reusable) {
+        const MeasureSummary* sum = state_.find(p.pid, mid);
+        if (sum) {
+            s.m = sum->sampled_rows;
+            s.n = sum->non_nan.non_nan_count;
+            s.S = sum->non_nan.sum();
+            s.Q = sum->non_nan.sum_sq();
+        }
+    } else {
+        const QueryLocalState& q = ql_.at(p.pid);
+        s.m = q.sampled;
+        s.n = q.moments[mid].non_nan_count;
+        s.S = q.moments[mid].sum();
+        s.Q = q.moments[mid].sum_sq();
+    }
+    return s;
+}
+
+std::vector<std::vector<StratumSample>> QueryEngine::assemble_estimator_input()
+    const {
+    std::vector<std::vector<StratumSample>> by_measure(measure_count_);
+    for (const ResidualPartition& p : residual_) {
+        for (MeasureId mid = 0; mid < measure_count_; ++mid) {
+            by_measure[mid].push_back(sample_for(p, mid));
+        }
+    }
+    return by_measure;
+}
+
+std::vector<StratumAlloc> QueryEngine::assemble_allocation() const {
+    std::vector<StratumAlloc> out;
+    out.reserve(residual_.size());
+    for (const ResidualPartition& p : residual_) {
+        StratumAlloc a;
+        a.N = p.N;
+        a.sampled = sampled_count(p);
+        a.priors = global_priors_;
+        a.observed.resize(measure_count_);
+        for (MeasureId mid = 0; mid < measure_count_; ++mid) {
+            a.observed[mid] = sample_for(p, mid);
+        }
+        out.push_back(std::move(a));
+    }
+    return out;
+}
+
+void QueryEngine::read_round(const std::vector<std::uint64_t>& targets,
+                             std::uint64_t ordinal, std::uint64_t round,
+                             bool is_exactify, QueryMetrics& metrics) {
+    std::vector<StratumCursor> cursors;
+    cursors.reserve(residual_.size());
+    std::vector<std::uint64_t> new_rows(residual_.size(), 0);
+
+    for (std::size_t h = 0; h < residual_.size(); ++h) {
+        const std::uint64_t sampled = sampled_count(residual_[h]);
+        const std::uint64_t target = h < targets.size() ? targets[h] : 0;
+        if (target <= sampled) continue;
+        const std::uint64_t delta = target - sampled;
+        ResidualPartition& p = residual_[h];
+        Rng rng(mix_seed(ordinal, round, h, target));
+        StratumCursor c;
+        if (p.reusable) {
+            c = make_reusable_sampled_cursor(table_, p.begin, p.size, *p.tracker,
+                                             delta, rng,
+                                             static_cast<StratumTag>(h));
+        } else {
+            c = make_query_local_sampled_cursor(table_, p.begin, *p.qualifying,
+                                                *p.tracker, delta, rng,
+                                                static_cast<StratumTag>(h));
+        }
+        new_rows[h] = c.owned.size();
+        cursors.push_back(std::move(c));
+    }
+    if (cursors.empty()) return;
+
+    std::vector<RowId>      ids;
+    std::vector<StratumTag> tags;
+    {
+        KWayMerge merge(cursors);
+        constexpr std::size_t kChunk = 4096;
+        std::vector<RowId>      id_chunk(kChunk);
+        std::vector<StratumTag> tag_chunk(kChunk);
+        std::size_t got = 0;
+        while ((got = merge.next_chunk(id_chunk, tag_chunk)) > 0) {
+            ids.insert(ids.end(), id_chunk.begin(), id_chunk.begin() + got);
+            tags.insert(tags.end(), tag_chunk.begin(), tag_chunk.begin() + got);
+        }
+    }
+
+    std::vector<std::vector<MomentStats>> round_moments(
+        residual_.size(), std::vector<MomentStats>(measure_count_));
+    std::vector<double> vals(ids.size());
+    for (MeasureId mid = 0; mid < measure_count_; ++mid) {
+        store_.gather(mid, ids, vals);
+        metrics.measure_reads += ids.size();
+        for (std::size_t i = 0; i < ids.size(); ++i) {
+            round_moments[tags[i]][mid].add_if_present(vals[i]);
+        }
+    }
+
+    for (std::size_t h = 0; h < residual_.size(); ++h) {
+        if (new_rows[h] == 0) continue;
+        ResidualPartition& p = residual_[h];
+        if (is_exactify) {
+            metrics.exactified_rows += new_rows[h];
+        } else {
+            metrics.sampled_rows += new_rows[h];
+        }
+        if (p.reusable) {
+            for (MeasureId mid = 0; mid < measure_count_; ++mid) {
+                SampleDelta d;
+                d.new_sampled_rows = new_rows[h];
+                d.moments = round_moments[h][mid];
+                state_.update_sampled(p.pid, mid, d);
+            }
+        } else {
+            QueryLocalState& q = ql_.at(p.pid);
+            q.sampled += new_rows[h];
+            for (MeasureId mid = 0; mid < measure_count_; ++mid) {
+                q.moments[mid].merge(round_moments[h][mid]);
+            }
+        }
+    }
+}
+
+void QueryEngine::exactify_round(std::uint64_t ordinal, std::uint64_t round,
+                                 QueryMetrics& metrics) {
+    // Target every residual stratum at its whole population: the draw clamps
+    // to the rows not yet sampled, so this reads each remainder exactly once.
+    std::vector<std::uint64_t> targets(residual_.size());
+    for (std::size_t h = 0; h < residual_.size(); ++h) {
+        targets[h] = residual_[h].N;
+    }
+    read_round(targets, ordinal, round, /*is_exactify=*/true, metrics);
+}
+
+bool QueryEngine::all_satisfied(const std::vector<AggregateEstimate>& est,
+                                double rel) const {
+    for (const AggregateEstimate& e : est) {
+        if (e.exact) continue;
+        if (!(e.relative_half_width <= rel)) return false;  // catches NaN/inf
+    }
+    return true;
+}
+
+QueryResult QueryEngine::execute(const RangeQuery& query,
+                                 std::uint64_t query_ordinal) {
+    QueryResult result;
+    QueryMetrics& m = result.metrics;
+    m.query_ordinal = query_ordinal;
+
+    const bool force_exact =
+        config_.accuracy_mode == EngineConfig::AccuracyMode::ForceExact;
+    const double rel = force_exact ? 0.0 : query.target.relative_error;
+    const double conf = force_exact ? 0.95 : query.target.confidence;
+    AccuracyTarget eff;
+    eff.relative_error = rel;
+    eff.confidence = conf;
+
+    access_path_.ensure_built();
+    RefineResult rr;
+    if (config_.allow_refine) {
+        rr = access_path_.refine(query.predicate, table_);
+    } else {
+        rr.frontier = access_path_.locate(query.predicate);
+    }
+    for (PartitionId pid : rr.retired) {
+        // A parent only has stored summaries if it was sampled before being
+        // split; make room so it can be marked retired either way.
+        state_.ensure_partition(pid, measure_count_);
+        state_.retire_partition(pid);
+    }
+    m.partitions_split = rr.retired.size();
+    m.partitions_touched =
+        rr.frontier.fully_contained.size() + rr.frontier.partial.size();
+
+    DecompositionResult d = decompose(query.predicate, access_path_, rr.frontier,
+                                      state_, table_, measure_count_);
+    m.exact_contributors = d.decomposition.exact_contributors.size();
+    m.reusable_strata = d.decomposition.reusable_strata.size();
+    m.query_local_strata = d.decomposition.query_local_strata.size();
+
+    build_residual_partitions(d.decomposition);
+
+    auto estimates = estimator_.estimate(d.exact_bucket, d.total_count,
+                                         assemble_estimator_input(),
+                                         global_mean_abs_, conf);
+
+    if (rel <= 0.0) {
+        // Read every residual stratum to completion, then re-estimate: with no
+        // residual variance left the answer is exact.
+        exactify_round(query_ordinal, /*round=*/0, m);
+        estimates = estimator_.estimate(d.exact_bucket, d.total_count,
+                                        assemble_estimator_input(),
+                                        global_mean_abs_, conf);
+        m.status = "exact";
+        m.exactify_cause = "none";
+        m.target_satisfied = true;
+        result.aggregates = std::move(estimates);
+        return result;
+    }
+
+    std::uint64_t round = 0;
+    bool exactified = false;
+    std::string cause = "none";
+    double pre_err = 0.0;
+
+    while (!all_satisfied(estimates, rel)) {
+        ++round;
+        const std::vector<StratumAlloc> alloc = assemble_allocation();
+        const AllocationPlan plan =
+            round == 1
+                ? allocator_.plan_initial(alloc, d.exact_bucket, eff,
+                                          global_mean_abs_)
+                : allocator_.plan_adaptive(alloc, estimates, eff,
+                                           global_mean_abs_);
+
+        const bool cheaper = plan.next_round_reads_fraction() >
+                             config_.allocator.exactification_sample_fraction;
+        // The round budget counts the final exactification round: with a
+        // budget of R, rounds 1..R-1 sample and round R reads the remainder.
+        const bool stalled =
+            plan.no_target_increase ||
+            round >= config_.allocator.max_sampling_rounds;
+
+        if (cheaper || stalled) {
+            pre_err = max_relative_half_width(estimates);
+            exactify_round(query_ordinal, round, m);
+            exactified = true;
+            cause = cheaper ? "cheaper_to_exactify" : "gave_up";
+            estimates = estimator_.estimate(d.exact_bucket, d.total_count,
+                                            assemble_estimator_input(),
+                                            global_mean_abs_, conf);
+            break;
+        }
+
+        read_round(plan.target, query_ordinal, round, /*is_exactify=*/false, m);
+        estimates = estimator_.estimate(d.exact_bucket, d.total_count,
+                                        assemble_estimator_input(),
+                                        global_mean_abs_, conf);
+    }
+
+    const bool satisfied = all_satisfied(estimates, rel);
+    m.adaptive_rounds = round;
+    m.exactify_cause = cause;
+    m.pre_exactification_error_bound = pre_err;
+    m.target_satisfied = satisfied;
+    m.status = exactified ? (satisfied ? "exactified" : "exhausted_unconverged")
+                          : "converged";
+    result.aggregates = std::move(estimates);
+    return result;
+}
+
+}  // namespace a3i

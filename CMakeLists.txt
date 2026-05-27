@@ -64,6 +64,10 @@ add_library(a3i_core STATIC
     src/aqp/sampler.cpp
     src/aqp/stratum_cursor.cpp
     src/aqp/decompose.cpp
+    src/aqp/estimator.cpp
+    src/aqp/allocator.cpp
+    src/engine/query_engine.cpp
+    src/util/tdist.cpp
 )
 target_include_directories(a3i_core PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
