@@ -41,6 +41,8 @@ public:
     std::vector<PartitionId> active_partitions() const override;
     std::optional<PartitionId> parent(PartitionId id) const override;
     bool ranges_are_row_id_ordered() const override { return false; }
+    bool supports_refine() const override { return false; }
+    bool is_fully_built() const override { return true; }
 
 private:
     // Recursively split node `id` on `axis` at its median value, cycling the

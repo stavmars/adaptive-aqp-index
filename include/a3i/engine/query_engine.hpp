@@ -19,7 +19,7 @@
 // A single behavior is captured by two flags: whether to honor the query's
 // accuracy target or force an exact answer, and whether to keep reusable
 // summaries across queries. Whether the substrate may be cracked is a
-// property of the substrate, supplied by the caller.
+// property of the substrate itself, read from its refinement predicate.
 
 #pragma once
 
@@ -44,10 +44,6 @@ struct EngineConfig {
     enum class AccuracyMode { PerQuery, ForceExact };
     AccuracyMode accuracy_mode = AccuracyMode::PerQuery;
     bool         persist_summaries = false;
-    // Derived from the substrate by the caller: true when the access path
-    // refines under queries (a cracking substrate), false for a fully-built
-    // one whose refine() is a no-op.
-    bool         allow_refine = true;
     AllocatorConfig allocator;
 };
 
@@ -66,7 +62,8 @@ private:
     // Per-query description of a residual partition (the sampling unit: all of
     // a partition's measures are drawn over the same rows).
     struct ResidualPartition {
-        bool          reusable = false;
+        bool          reusable = false;   // cursor geometry: contiguous range
+        bool          write_to_state = false;  // route moments to state_ (persist) vs ql_
         PartitionId   pid = 0;
         IndexPos      begin = 0;
         std::uint32_t size = 0;

@@ -72,6 +72,18 @@ public:
     /// which lets the read-path cursor skip its sort. False for substrates
     /// whose build/split permutes rows (the KD substrates).
     virtual bool ranges_are_row_id_ordered() const = 0;
+
+    /// True iff `refine()` can grow the structure under queries (a cracking
+    /// substrate). False for a fully-built structure whose `refine()` is a
+    /// no-op. The engine consults this to decide whether to crack or merely
+    /// locate, so the read path stays substrate-agnostic.
+    virtual bool supports_refine() const = 0;
+
+    /// True iff the whole structure is materialized up front by `ensure_built()`
+    /// with a stable, query-independent partitioning. False when partitions are
+    /// created lazily by queries. Only a fully-built structure can have every
+    /// node's summary precomputed at initialization.
+    virtual bool is_fully_built() const = 0;
 };
 
 }  // namespace a3i

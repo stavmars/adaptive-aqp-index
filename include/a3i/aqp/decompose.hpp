@@ -27,16 +27,19 @@
 
 namespace a3i {
 
-/// Decompose query `q` over the already-classified `frontier`. `state_store`
-/// is consulted (and, for sampled partitions, has empty summaries created in
-/// it) so reusable strata carry their partition's persistent tracker. No
-/// measure values are read: exact totals come from stored summaries and the
-/// qualifying count from a dimension-only scan of the partial partitions.
+/// Decompose query `q` over the already-classified `frontier`. When
+/// `persist` is true, `state_store` is consulted and, for sampled
+/// partitions, has empty summaries created in it; reusable strata carry the
+/// partition's persistent tracker. When `persist` is false, `state_store` is
+/// not touched at all: reusable strata get a fresh per-query tracker, and the
+/// exact-contributor check is skipped so every partition is re-read. No
+/// measure values are read in either case.
 DecompositionResult decompose(const HyperRect& q,
                               const AdaptiveAccessPath& access_path,
                               const QueryPartitionSet& frontier,
                               PartitionStateStore& state_store,
                               const IndexTable& table,
-                              std::size_t measure_count);
+                              std::size_t measure_count,
+                              bool persist);
 
 }  // namespace a3i

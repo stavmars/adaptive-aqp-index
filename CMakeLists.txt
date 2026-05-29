@@ -67,6 +67,7 @@ add_library(a3i_core STATIC
     src/aqp/estimator.cpp
     src/aqp/allocator.cpp
     src/engine/query_engine.cpp
+    src/engine/method.cpp
     src/util/tdist.cpp
 )
 target_include_directories(a3i_core PUBLIC

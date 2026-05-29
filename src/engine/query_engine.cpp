@@ -64,12 +64,21 @@ void QueryEngine::build_residual_partitions(const QueryDecomposition& decomp) {
         if (seen.count(s.pid)) continue;
         seen.emplace(s.pid, residual_.size());
         ResidualPartition p;
-        p.reusable = true;
-        p.pid = s.pid;
+        p.reusable       = true;
+        p.write_to_state = config_.persist_summaries;
+        p.pid   = s.pid;
         p.begin = s.begin;
-        p.size = static_cast<std::uint32_t>(s.end - s.begin);
-        p.N = s.population_size;
+        p.size  = static_cast<std::uint32_t>(s.end - s.begin);
+        p.N     = s.population_size;
         p.tracker = s.tracker;
+        if (!p.write_to_state) {
+            // Tracker came from decompose (query-local fresh tracker); park
+            // the per-query accumulator alongside the query-local strata.
+            QueryLocalState st;
+            st.moments.resize(measure_count_);
+            st.tracker = s.tracker;
+            ql_.emplace(s.pid, std::move(st));
+        }
         residual_.push_back(std::move(p));
     }
     for (const QueryLocalStratum& s : decomp.query_local_strata) {
@@ -79,10 +88,11 @@ void QueryEngine::build_residual_partitions(const QueryDecomposition& decomp) {
         st.tracker = std::make_shared<SampleTracker>(s.qualifying->size());
         auto [it, ok] = ql_.emplace(s.pid, std::move(st));
         ResidualPartition p;
-        p.reusable = false;
-        p.pid = s.pid;
+        p.reusable       = false;
+        p.write_to_state = false;
+        p.pid   = s.pid;
         p.begin = s.begin;
-        p.size = static_cast<std::uint32_t>(s.qualifying->size());
+        p.size  = static_cast<std::uint32_t>(s.qualifying->size());
         p.qualifying = s.qualifying.get();
         p.N = s.population_size;
         p.tracker = it->second.tracker;
@@ -91,7 +101,7 @@ void QueryEngine::build_residual_partitions(const QueryDecomposition& decomp) {
 }
 
 std::uint64_t QueryEngine::sampled_count(const ResidualPartition& p) const {
-    if (p.reusable) {
+    if (p.write_to_state) {
         const MeasureSummary* s = state_.find(p.pid, 0);
         return s ? s->sampled_rows : 0;
     }
@@ -102,7 +112,7 @@ StratumSample QueryEngine::sample_for(const ResidualPartition& p,
                                       MeasureId mid) const {
     StratumSample s;
     s.N = p.N;
-    if (p.reusable) {
+    if (p.write_to_state) {
         const MeasureSummary* sum = state_.find(p.pid, mid);
         if (sum) {
             s.m = sum->sampled_rows;
@@ -210,7 +220,7 @@ void QueryEngine::read_round(const std::vector<std::uint64_t>& targets,
         } else {
             metrics.sampled_rows += new_rows[h];
         }
-        if (p.reusable) {
+        if (p.write_to_state) {
             for (MeasureId mid = 0; mid < measure_count_; ++mid) {
                 SampleDelta d;
                 d.new_sampled_rows = new_rows[h];
@@ -263,23 +273,27 @@ QueryResult QueryEngine::execute(const RangeQuery& query,
 
     access_path_.ensure_built();
     RefineResult rr;
-    if (config_.allow_refine) {
+    if (access_path_.supports_refine()) {
         rr = access_path_.refine(query.predicate, table_);
     } else {
         rr.frontier = access_path_.locate(query.predicate);
     }
-    for (PartitionId pid : rr.retired) {
-        // A parent only has stored summaries if it was sampled before being
-        // split; make room so it can be marked retired either way.
-        state_.ensure_partition(pid, measure_count_);
-        state_.retire_partition(pid);
+    if (config_.persist_summaries) {
+        for (PartitionId pid : rr.retired) {
+            // A parent only has stored summaries if it was sampled before being
+            // split; make room so it can be marked retired either way. Without
+            // persistence nothing is stored, so there is nothing to retire.
+            state_.ensure_partition(pid, measure_count_);
+            state_.retire_partition(pid);
+        }
     }
     m.partitions_split = rr.retired.size();
     m.partitions_touched =
         rr.frontier.fully_contained.size() + rr.frontier.partial.size();
 
     DecompositionResult d = decompose(query.predicate, access_path_, rr.frontier,
-                                      state_, table_, measure_count_);
+                                      state_, table_, measure_count_,
+                                      config_.persist_summaries);
     m.exact_contributors = d.decomposition.exact_contributors.size();
     m.reusable_strata = d.decomposition.reusable_strata.size();
     m.query_local_strata = d.decomposition.query_local_strata.size();

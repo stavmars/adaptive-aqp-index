@@ -107,7 +107,7 @@ TEST(Decompose, ContributorsCoverQualifyingRowsDisjointlyPerMeasure) {
     PartitionStateStore store;
 
     const DecompositionResult d =
-        decompose(q, path, rr.frontier, store, table, kMeasures);
+        decompose(q, path, rr.frontier, store, table, kMeasures, /*persist=*/true);
 
     const std::set<RowId> truth = qualifying_rows(table, q);
     EXPECT_EQ(d.total_count, truth.size());
@@ -150,7 +150,7 @@ TEST(Decompose, FullyContainedAllExactBecomeExactContributors) {
     }
 
     const DecompositionResult d =
-        decompose(q, path, rr.frontier, store, table, kMeasures);
+        decompose(q, path, rr.frontier, store, table, kMeasures, /*persist=*/true);
 
     // Fully-contained partitions are now exact; none should be a stratum.
     EXPECT_TRUE(d.decomposition.reusable_strata.empty());
@@ -186,7 +186,7 @@ TEST(Decompose, AllOrNothingShortCircuit) {
     s0.non_nan.add_if_present(1.0);
 
     const DecompositionResult d =
-        decompose(q, path, rr.frontier, store, table, kMeasures);
+        decompose(q, path, rr.frontier, store, table, kMeasures, /*persist=*/true);
 
     // The target must appear as a reusable stratum (both measures), never as
     // an exact contributor.
