@@ -280,6 +280,7 @@ TEST(Methods, ApproximateRunConvergesOrExactifies) {
     const double rel = 0.25;
     const RangeQuery q = query(0.0, 20.0, 0.0, 20.0, rel);
     const QueryResult got = engine.execute(q, 9);
+    const QueryResult oracle = exact_scan(*f.store, f.schema, q);
 
     EXPECT_TRUE(got.metrics.target_satisfied);
     const std::string& s = got.metrics.status;
@@ -289,8 +290,85 @@ TEST(Methods, ApproximateRunConvergesOrExactifies) {
     } else {
         EXPECT_NE(got.metrics.exactify_cause, "none");
     }
-    for (const auto& e : got.aggregates) {
+    for (std::size_t i = 0; i < got.aggregates.size(); ++i) {
+        const auto& e = got.aggregates[i];
         if (e.exact) continue;
         EXPECT_LE(e.relative_half_width, rel) << static_cast<int>(e.op);
+        // The estimate must land near the truth, not merely inside its own
+        // self-reported interval. The fixed seed keeps this deterministic.
+        const auto& o = oracle.aggregates[i];
+        if (std::isnan(o.estimate)) continue;
+        const double half_width = 0.5 * (e.ci_high - e.ci_low);
+        EXPECT_LE(std::abs(e.estimate - o.estimate), 4.0 * half_width)
+            << "estimate far from truth for op " << static_cast<int>(e.op);
     }
 }
+
+// plain, agg and a3i reproduce the oracle exactly over the fully-built static
+// substrate too -- the engine is identical, only the partitioning differs.
+TEST(Methods, StaticExactModeReproducesOracle) {
+    Fixture f;
+    const RangeQuery exact_q = query(2.0, 12.0, 3.0, 17.0, /*rel=*/0.0);
+    const QueryResult oracle = exact_scan(*f.store, f.schema, exact_q);
+
+    for (Behavior b : {Behavior::Plain, Behavior::Agg, Behavior::A3i}) {
+        IndexTable table = f.make_table();
+        StaticKdAccessPath path(f.substrate());
+        path.prepare(table);
+        QueryEngine engine(*f.store, table, path, behavior_config(b));
+        const QueryResult got = engine.execute(exact_q, /*ordinal=*/1);
+        expect_matches_oracle(got, oracle);
+    }
+}
+
+// Eager materialization: over the static substrate the summary-keeping behavior
+// pays its measure reads once at initialize(), so even the FIRST fully-contained
+// query answers with zero query-time measure reads -- the pay-up-front anchor.
+// The plain behavior over the same substrate keeps nothing and re-reads.
+TEST(Methods, KdAggEagerZeroQueryReads) {
+    Fixture f;
+    const RangeQuery q = query(0.0, 20.0, 0.0, 20.0, /*rel=*/0.0);
+    const QueryResult oracle = exact_scan(*f.store, f.schema, q);
+
+    {
+        IndexTable table = f.make_table();
+        StaticKdAccessPath path(f.substrate());
+        path.prepare(table);
+        QueryEngine engine(*f.store, table, path, behavior_config(Behavior::Agg));
+        const QueryResult first = engine.execute(q, 1);
+        EXPECT_EQ(first.metrics.measure_reads, 0u);
+        expect_matches_oracle(first, oracle);
+    }
+    {
+        IndexTable table = f.make_table();
+        StaticKdAccessPath path(f.substrate());
+        path.prepare(table);
+        QueryEngine engine(*f.store, table, path, behavior_config(Behavior::Plain));
+        const QueryResult first = engine.execute(q, 1);
+        EXPECT_GT(first.metrics.measure_reads, 0u);
+        expect_matches_oracle(first, oracle);
+    }
+}
+
+// The same behavior agrees over the two substrates: a real two-substrate gate.
+TEST(Methods, SubstrateIndependenceAgrees) {
+    Fixture f;
+    const RangeQuery exact_q = query(1.0, 13.0, 2.0, 16.0, /*rel=*/0.0);
+
+    for (Behavior b : {Behavior::Plain, Behavior::Agg, Behavior::A3i}) {
+        IndexTable t1 = f.make_table();
+        AdaptiveKdAccessPath p1(f.substrate());
+        p1.prepare(t1);
+        QueryEngine adaptive(*f.store, t1, p1, behavior_config(b));
+        const QueryResult got_adaptive = adaptive.execute(exact_q, 7);
+
+        IndexTable t2 = f.make_table();
+        StaticKdAccessPath p2(f.substrate());
+        p2.prepare(t2);
+        QueryEngine stat(*f.store, t2, p2, behavior_config(b));
+        const QueryResult got_static = stat.execute(exact_q, 7);
+
+        expect_agree(got_adaptive, got_static);
+    }
+}
+

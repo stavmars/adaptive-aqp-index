@@ -78,33 +78,29 @@ TEST(AdaptiveKdAccessPath, EnsureBuiltIsIdempotent) {
     EXPECT_EQ(path.active_partitions().size(), 1u);
 }
 
-TEST(AdaptiveKdAccessPath, LocateFullyContained) {
+TEST(AdaptiveKdAccessPath, ClassifyFullyContained) {
     IndexTable table = make_table();
     AdaptiveKdAccessPath path(config());
     path.prepare(table);
     path.ensure_built();
 
     // A query that covers the whole domain contains the root.
-    QueryPartitionSet set = path.locate(HyperRect{{{-1.0, 11.0}, {-1.0, 11.0}}});
-    ASSERT_EQ(set.fully_contained.size(), 1u);
-    EXPECT_EQ(set.fully_contained[0], 0u);
-    EXPECT_TRUE(set.partial.empty());
+    EXPECT_EQ(path.classify(0, HyperRect{{{-1.0, 11.0}, {-1.0, 11.0}}}),
+              Containment::Contained);
 }
 
-TEST(AdaptiveKdAccessPath, LocatePartialOverlap) {
+TEST(AdaptiveKdAccessPath, ClassifyPartialOverlap) {
     IndexTable table = make_table();
     AdaptiveKdAccessPath path(config());
     path.prepare(table);
     path.ensure_built();
 
     // Overlaps the domain but does not contain it.
-    QueryPartitionSet set = path.locate(HyperRect{{{2.0, 6.0}, {2.0, 6.0}}});
-    EXPECT_TRUE(set.fully_contained.empty());
-    ASSERT_EQ(set.partial.size(), 1u);
-    EXPECT_EQ(set.partial[0], 0u);
+    EXPECT_EQ(path.classify(0, HyperRect{{{2.0, 6.0}, {2.0, 6.0}}}),
+              Containment::Partial);
 }
 
-TEST(AdaptiveKdAccessPath, LocateDisjoint) {
+TEST(AdaptiveKdAccessPath, ClassifyDisjoint) {
     IndexTable table = make_table();
     AdaptiveKdAccessPath path(config());
     path.prepare(table);
@@ -112,9 +108,8 @@ TEST(AdaptiveKdAccessPath, LocateDisjoint) {
 
     // Entirely outside the domain (abutting at the upper edge counts as
     // disjoint under the half-open rule).
-    QueryPartitionSet set = path.locate(HyperRect{{{10.0, 20.0}, {10.0, 20.0}}});
-    EXPECT_TRUE(set.fully_contained.empty());
-    EXPECT_TRUE(set.partial.empty());
+    EXPECT_EQ(path.classify(0, HyperRect{{{10.0, 20.0}, {10.0, 20.0}}}),
+              Containment::Disjoint);
 }
 
 TEST(AdaptiveKdAccessPath, RootHasNoParent) {
@@ -130,8 +125,10 @@ TEST(AdaptiveKdAccessPath, RefineRetiresNothing) {
     AdaptiveKdAccessPath path(config());
     path.prepare(table);
     path.ensure_built();
-    auto rr = path.refine(HyperRect{{{2.0, 6.0}, {2.0, 6.0}}}, table);
-    EXPECT_TRUE(rr.retired.empty());
+    // The root's population is below the default refinement threshold, so a
+    // crack makes no progress: nothing retires and the structure is unchanged.
+    auto retired = path.refine(0, HyperRect{{{2.0, 6.0}, {2.0, 6.0}}}, table);
+    EXPECT_TRUE(retired.empty());
     EXPECT_EQ(path.active_partitions().size(), 1u);
 }
 

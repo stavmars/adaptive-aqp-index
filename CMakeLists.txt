@@ -64,6 +64,7 @@ add_library(a3i_core STATIC
     src/aqp/sampler.cpp
     src/aqp/stratum_cursor.cpp
     src/aqp/decompose.cpp
+    src/aqp/eager_materialize.cpp
     src/aqp/estimator.cpp
     src/aqp/allocator.cpp
     src/engine/query_engine.cpp

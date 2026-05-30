@@ -29,8 +29,12 @@ public:
 
     void prepare(IndexTable& table) override;
     void ensure_built() override;
-    QueryPartitionSet locate(const HyperRect& q) const override;
-    RefineResult refine(const HyperRect& q, IndexTable& table) override;
+    std::vector<PartitionId> roots() const override;
+    std::vector<PartitionId> children(PartitionId id) const override;
+    bool is_leaf(PartitionId id) const override;
+    Containment classify(PartitionId id, const HyperRect& q) const override;
+    std::vector<PartitionId> refine(PartitionId id, const HyperRect& q,
+                                    IndexTable& table) override;
     PartitionView partition(PartitionId id) const override;
     std::vector<PartitionId> active_partitions() const override;
     std::optional<PartitionId> parent(PartitionId id) const override;

@@ -5,6 +5,7 @@
 #include <limits>
 
 #include "a3i/aqp/decompose.hpp"
+#include "a3i/aqp/eager_materialize.hpp"
 #include "a3i/aqp/stratum_cursor.hpp"
 #include "a3i/storage/manifest.hpp"
 #include "a3i/util/rng.hpp"
@@ -53,6 +54,19 @@ QueryEngine::QueryEngine(const BinaryColumnStore& store, IndexTable& table,
         global_priors_[mid] = prior;
         global_mean_abs_ = std::max(global_mean_abs_, std::abs(prior.mu_nn));
     }
+}
+
+void QueryEngine::initialize() {
+    if (initialized_) return;
+    access_path_.ensure_built();
+    // Eager materialization applies only to a summary-keeping behavior over a
+    // fully-built, stable substrate; on a cracking substrate the partitions are
+    // created by queries, so summaries can only be filled lazily on first touch.
+    if (config_.persist_summaries && access_path_.is_fully_built()) {
+        materialize_all_summaries(access_path_, table_, store_, state_,
+                                  measure_count_);
+    }
+    initialized_ = true;
 }
 
 void QueryEngine::build_residual_partitions(const QueryDecomposition& decomp) {
@@ -271,29 +285,17 @@ QueryResult QueryEngine::execute(const RangeQuery& query,
     eff.relative_error = rel;
     eff.confidence = conf;
 
-    access_path_.ensure_built();
-    RefineResult rr;
-    if (access_path_.supports_refine()) {
-        rr = access_path_.refine(query.predicate, table_);
-    } else {
-        rr.frontier = access_path_.locate(query.predicate);
-    }
-    if (config_.persist_summaries) {
-        for (PartitionId pid : rr.retired) {
-            // A parent only has stored summaries if it was sampled before being
-            // split; make room so it can be marked retired either way. Without
-            // persistence nothing is stored, so there is nothing to retire.
-            state_.ensure_partition(pid, measure_count_);
-            state_.retire_partition(pid);
-        }
-    }
-    m.partitions_split = rr.retired.size();
-    m.partitions_touched =
-        rr.frontier.fully_contained.size() + rr.frontier.partial.size();
-
-    DecompositionResult d = decompose(query.predicate, access_path_, rr.frontier,
-                                      state_, table_, measure_count_,
-                                      config_.persist_summaries);
+    initialize();
+    // One top-down descent from the substrate roots builds the decomposition:
+    // it classifies each node, cracks partial leaves through the substrate's
+    // refine() when the substrate adapts, and stops at contained nodes already
+    // exact for every measure. The substrate supplies geometry and
+    // partitioning; the descent owns the state-store decisions.
+    DecompositionResult d = decompose_descent(
+        query.predicate, access_path_, state_, table_, measure_count_,
+        config_.persist_summaries, access_path_.supports_refine());
+    m.partitions_split = d.partitions_split;
+    m.partitions_touched = d.partitions_touched;
     m.exact_contributors = d.decomposition.exact_contributors.size();
     m.reusable_strata = d.decomposition.reusable_strata.size();
     m.query_local_strata = d.decomposition.query_local_strata.size();

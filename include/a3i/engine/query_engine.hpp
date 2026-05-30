@@ -52,6 +52,13 @@ public:
     QueryEngine(const BinaryColumnStore& store, IndexTable& table,
                 AdaptiveAccessPath& access_path, EngineConfig config);
 
+    /// Build the substrate and, for a summary-keeping behavior over a
+    /// fully-built substrate, precompute every leaf's exact summary up front so
+    /// later fully-contained queries answer with no measure reads. Idempotent;
+    /// execute() calls it on the first query, but a caller that wants the
+    /// up-front cost timed separately may call it explicitly.
+    void initialize();
+
     /// Answer one query. `query_ordinal` seeds the sampling draws so a run is
     /// reproducible.
     QueryResult execute(const RangeQuery& query, std::uint64_t query_ordinal);
@@ -106,6 +113,7 @@ private:
     EngineConfig             config_;
     std::size_t              measure_count_;
 
+    bool                initialized_ = false;
     PartitionStateStore state_;
     Estimator           estimator_;
     Allocator           allocator_;

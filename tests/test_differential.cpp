@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "a3i/access_path/substrate_factory.hpp"
 #include "a3i/core/query.hpp"
 #include "a3i/core/schema.hpp"
 #include "a3i/engine/query_engine.hpp"
@@ -140,19 +141,23 @@ void expect_matches_oracle(const QueryResult& got, const QueryResult& oracle) {
     }
 }
 
-// Run one rectangle through a freshly-built engine (independent state) and
-// compare to the oracle.
+// Run one rectangle through a freshly-built engine (independent state) over
+// every registered substrate and compare each to the oracle. Exact agreement
+// must not depend on which substrate partitions the data.
 void check(const Fixture& f, const RangeQuery& q) {
-    IndexTable table = f.make_table();
-    AdaptiveKdAccessPath path(f.substrate());
-    path.prepare(table);
-    EngineConfig cfg;
-    cfg.accuracy_mode = EngineConfig::AccuracyMode::ForceExact;
-    QueryEngine engine(*f.store, table, path, cfg);
-
-    const QueryResult got = engine.execute(q, 1);
     const QueryResult oracle = exact_scan(*f.store, f.schema, q);
-    expect_matches_oracle(got, oracle);
+    for (const std::string& id : SubstrateFactory::instance().registered_ids()) {
+        SCOPED_TRACE(id);
+        IndexTable table = f.make_table();
+        auto path = SubstrateFactory::instance().create(id, f.substrate());
+        path->prepare(table);
+        EngineConfig cfg;
+        cfg.accuracy_mode = EngineConfig::AccuracyMode::ForceExact;
+        QueryEngine engine(*f.store, table, *path, cfg);
+
+        const QueryResult got = engine.execute(q, 1);
+        expect_matches_oracle(got, oracle);
+    }
 }
 
 }  // namespace

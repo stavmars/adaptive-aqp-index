@@ -78,6 +78,25 @@ void check_points_in_bounds(const StaticKdAccessPath& path,
     }
 }
 
+// Split the active leaves into those wholly inside `q` and those straddling it.
+struct ActiveClassification {
+    std::vector<PartitionId> fully_contained;
+    std::vector<PartitionId> partial;
+};
+
+ActiveClassification classify_active(const AdaptiveAccessPath& path,
+                                     const HyperRect& q) {
+    ActiveClassification out;
+    for (PartitionId id : path.active_partitions()) {
+        switch (path.classify(id, q)) {
+            case Containment::Contained: out.fully_contained.push_back(id); break;
+            case Containment::Partial:   out.partial.push_back(id);         break;
+            case Containment::Disjoint:                                     break;
+        }
+    }
+    return out;
+}
+
 TEST(StaticKd, BuildSplitsDownToLeafSize) {
     IndexTable table = make_grid();
     StaticKdAccessPath path(config(/*leaf_min_size=*/16));
@@ -110,7 +129,7 @@ TEST(StaticKd, LocateClassifiesContainedAndPartial) {
     path.ensure_built();
 
     HyperRect q{{{3.0, 11.0}, {3.0, 11.0}}};
-    QueryPartitionSet set = path.locate(q);
+    ActiveClassification set = classify_active(path, q);
 
     // Fully-contained partitions are inside q and every one of their points
     // qualifies; partial partitions intersect q but are not inside it.
@@ -134,16 +153,18 @@ TEST(StaticKd, WholeDomainIsAllContained) {
     path.prepare(table);
     path.ensure_built();
 
-    QueryPartitionSet full = path.locate(HyperRect{{{-1.0, 17.0}, {-1.0, 17.0}}});
+    ActiveClassification full =
+        classify_active(path, HyperRect{{{-1.0, 17.0}, {-1.0, 17.0}}});
     EXPECT_EQ(full.fully_contained.size(), path.active_partitions().size());
     EXPECT_TRUE(full.partial.empty());
 
-    QueryPartitionSet none = path.locate(HyperRect{{{50.0, 60.0}, {50.0, 60.0}}});
+    ActiveClassification none =
+        classify_active(path, HyperRect{{{50.0, 60.0}, {50.0, 60.0}}});
     EXPECT_TRUE(none.fully_contained.empty());
     EXPECT_TRUE(none.partial.empty());
 }
 
-TEST(StaticKd, RefineIsNoOpAndReturnsFrontier) {
+TEST(StaticKd, RefineIsNoOp) {
     IndexTable table = make_grid();
     StaticKdAccessPath path(config(/*leaf_min_size=*/16));
     path.prepare(table);
@@ -153,22 +174,13 @@ TEST(StaticKd, RefineIsNoOpAndReturnsFrontier) {
     std::sort(before.begin(), before.end());
 
     HyperRect q{{{3.0, 11.0}, {3.0, 11.0}}};
-    auto rr = path.refine(q, table);
+    auto retired = path.refine(0, q, table);
 
     auto after = path.active_partitions();
     std::sort(after.begin(), after.end());
 
-    EXPECT_TRUE(rr.retired.empty());
+    EXPECT_TRUE(retired.empty());
     EXPECT_EQ(before, after) << "static refine must not change the structure";
-
-    // The returned frontier equals a fresh locate (no adaptation happened).
-    QueryPartitionSet located = path.locate(q);
-    auto sorted = [](std::vector<PartitionId> v) {
-        std::sort(v.begin(), v.end());
-        return v;
-    };
-    EXPECT_EQ(sorted(rr.frontier.fully_contained), sorted(located.fully_contained));
-    EXPECT_EQ(sorted(rr.frontier.partial), sorted(located.partial));
 }
 
 TEST(StaticKd, AncestryReachesParentlessRoot) {
@@ -195,7 +207,7 @@ TEST(StaticKd, RefineWrongTableThrows) {
     StaticKdAccessPath path(config(/*leaf_min_size=*/16));
     path.prepare(table);
     path.ensure_built();
-    EXPECT_THROW(path.refine(HyperRect{{{3.0, 11.0}, {3.0, 11.0}}}, other),
+    EXPECT_THROW(path.refine(0, HyperRect{{{3.0, 11.0}, {3.0, 11.0}}}, other),
                  std::invalid_argument);
 }
 

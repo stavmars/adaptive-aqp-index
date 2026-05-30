@@ -7,9 +7,9 @@
 // The whole tree therefore exists before query 0 returns; its construction
 // cost is charged to query 0 like any other substrate build.
 //
-// refine() is a genuine no-op: the structure never adapts. It still returns
-// the frontier classification of the query (== locate) so callers share one
-// code path with the adaptive substrate.
+// refine() is a genuine no-op: the structure never adapts. It returns an
+// empty retired-parent list and leaves the table untouched; the engine
+// descends the already-built children() instead.
 //
 // The median value partition is unstable, so ranges_are_row_id_ordered() is
 // false and the read path sorts per stratum, exactly as for the adaptive
@@ -35,8 +35,12 @@ public:
 
     void prepare(IndexTable& table) override;
     void ensure_built() override;
-    QueryPartitionSet locate(const HyperRect& q) const override;
-    RefineResult refine(const HyperRect& q, IndexTable& table) override;
+    std::vector<PartitionId> roots() const override;
+    std::vector<PartitionId> children(PartitionId id) const override;
+    bool is_leaf(PartitionId id) const override;
+    Containment classify(PartitionId id, const HyperRect& q) const override;
+    std::vector<PartitionId> refine(PartitionId id, const HyperRect& q,
+                                    IndexTable& table) override;
     PartitionView partition(PartitionId id) const override;
     std::vector<PartitionId> active_partitions() const override;
     std::optional<PartitionId> parent(PartitionId id) const override;

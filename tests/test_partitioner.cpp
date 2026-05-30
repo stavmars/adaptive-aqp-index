@@ -75,6 +75,49 @@ void check_points_in_bounds(const AdaptiveAccessPath& path, const IndexTable& ta
     }
 }
 
+// The active leaves split into those wholly inside `q` and those straddling it
+// (a replacement for the old whole-frontier locate()).
+struct ActiveClassification {
+    std::vector<PartitionId> fully_contained;
+    std::vector<PartitionId> partial;
+};
+
+ActiveClassification classify_active(const AdaptiveAccessPath& path,
+                                     const HyperRect& q) {
+    ActiveClassification out;
+    for (PartitionId id : path.active_partitions()) {
+        switch (path.classify(id, q)) {
+            case Containment::Contained: out.fully_contained.push_back(id); break;
+            case Containment::Partial:   out.partial.push_back(id);         break;
+            case Containment::Disjoint:                                     break;
+        }
+    }
+    return out;
+}
+
+// Crack `path` toward `q` the way the engine's descent does: refine every
+// partial leaf until nothing changes. Returns all retired parent ids.
+std::vector<PartitionId> refine_to_query(AdaptiveAccessPath& path,
+                                         const HyperRect& q, IndexTable& table) {
+    std::vector<PartitionId> retired;
+    bool progress = true;
+    while (progress) {
+        progress = false;
+        for (PartitionId id : path.active_partitions()) {
+            if (path.is_leaf(id) &&
+                path.classify(id, q) == Containment::Partial) {
+                auto r = path.refine(id, q, table);
+                if (!r.empty()) {
+                    retired.insert(retired.end(), r.begin(), r.end());
+                    progress = true;
+                    break;  // the active set changed; restart the scan
+                }
+            }
+        }
+    }
+    return retired;
+}
+
 TEST(Partitioner, RefineCracksBoundaryPartition) {
     IndexTable table = make_grid();
     AdaptiveKdAccessPath path(config(/*threshold=*/8));
@@ -83,23 +126,16 @@ TEST(Partitioner, RefineCracksBoundaryPartition) {
     ASSERT_EQ(path.active_partitions().size(), 1u);
 
     HyperRect q{{{3.0, 7.0}, {3.0, 7.0}}};
-    auto rr = path.refine(q, table);
+    auto retired = refine_to_query(path, q, table);
 
-    EXPECT_FALSE(rr.retired.empty());
+    EXPECT_FALSE(retired.empty());
     EXPECT_GT(path.active_partitions().size(), 1u);
     check_cover(path, table.size());
     check_points_in_bounds(path, table);
 
-    // The returned frontier must equal what a fresh locate now reports, so
-    // the caller never has to descend the structure a second time.
-    QueryPartitionSet relocated = path.locate(q);
-    auto sorted = [](std::vector<PartitionId> v) {
-        std::sort(v.begin(), v.end());
-        return v;
-    };
-    EXPECT_EQ(sorted(rr.frontier.fully_contained),
-              sorted(relocated.fully_contained));
-    EXPECT_EQ(sorted(rr.frontier.partial), sorted(relocated.partial));
+    // After isolating q, the active frontier has at least one partition wholly
+    // inside it -- the boundary child the crack carved out.
+    EXPECT_FALSE(classify_active(path, q).fully_contained.empty());
 }
 
 TEST(Partitioner, CrackedFullyContainedMatchesQuery) {
@@ -109,11 +145,11 @@ TEST(Partitioner, CrackedFullyContainedMatchesQuery) {
     path.ensure_built();
 
     HyperRect q{{{3.0, 7.0}, {3.0, 7.0}}};
-    path.refine(q, table);
+    refine_to_query(path, q, table);
 
-    // After isolating q, locate must report at least one fully-contained
+    // After isolating q, the frontier must report at least one fully-contained
     // partition, and every fully-contained partition's points satisfy q.
-    QueryPartitionSet set = path.locate(q);
+    ActiveClassification set = classify_active(path, q);
     EXPECT_FALSE(set.fully_contained.empty());
     for (PartitionId id : set.fully_contained) {
         PartitionView pv = path.partition(id);
@@ -131,10 +167,10 @@ TEST(Partitioner, RetiredParentsAreInactiveWithAncestry) {
     path.ensure_built();
 
     HyperRect q{{{3.0, 7.0}, {3.0, 7.0}}};
-    auto rr = path.refine(q, table);
-    ASSERT_FALSE(rr.retired.empty());
+    auto retired = refine_to_query(path, q, table);
+    ASSERT_FALSE(retired.empty());
 
-    for (PartitionId id : rr.retired) {
+    for (PartitionId id : retired) {
         EXPECT_FALSE(path.partition(id).active) << "retired parent still active";
     }
     // Every active leaf has a parent chain that terminates at the parentless
@@ -167,9 +203,9 @@ TEST(Partitioner, FailedCrackLeavesPartitionUnchanged) {
     // lies above all of the data, so each Hoare partition lands every point
     // on one side and fails. Nothing splits.
     HyperRect q{{{50.0, 60.0}, {50.0, 60.0}}};
-    ASSERT_FALSE(path.locate(q).partial.empty());
-    auto rr = path.refine(q, table);
-    EXPECT_TRUE(rr.retired.empty());
+    ASSERT_EQ(path.classify(0, q), Containment::Partial);
+    auto retired = refine_to_query(path, q, table);
+    EXPECT_TRUE(retired.empty());
     EXPECT_EQ(path.active_partitions().size(), 1u);
 }
 
@@ -181,8 +217,8 @@ TEST(Partitioner, BelowThresholdIsNotCracked) {
     path.ensure_built();
 
     HyperRect q{{{3.0, 7.0}, {3.0, 7.0}}};
-    auto rr = path.refine(q, table);
-    EXPECT_TRUE(rr.retired.empty());
+    auto retired = refine_to_query(path, q, table);
+    EXPECT_TRUE(retired.empty());
     EXPECT_EQ(path.active_partitions().size(), 1u);
 }
 
@@ -193,9 +229,9 @@ TEST(Partitioner, RepeatedRefineConverges) {
     path.ensure_built();
 
     HyperRect q{{{3.0, 7.0}, {3.0, 7.0}}};
-    path.refine(q, table);
+    refine_to_query(path, q, table);
     std::size_t after_first = path.active_partitions().size();
-    path.refine(q, table);
+    refine_to_query(path, q, table);
     std::size_t after_second = path.active_partitions().size();
 
     // The boundary child isolating q is at or below threshold after the first
@@ -211,7 +247,7 @@ TEST(Partitioner, RefineWrongTableThrows) {
     AdaptiveKdAccessPath path(config(/*threshold=*/4));
     path.prepare(table);
     path.ensure_built();
-    EXPECT_THROW(path.refine(HyperRect{{{3.0, 7.0}, {3.0, 7.0}}}, other),
+    EXPECT_THROW(path.refine(0, HyperRect{{{3.0, 7.0}, {3.0, 7.0}}}, other),
                  std::invalid_argument);
 }
 

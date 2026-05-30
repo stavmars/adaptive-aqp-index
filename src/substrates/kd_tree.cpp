@@ -17,26 +17,27 @@ void KdTree::reset(const HyperRect& root_bounds, IndexPos n) {
     nodes_.push_back(std::move(root));
 }
 
-void KdTree::descend(PartitionId id, const HyperRect& q,
-                     QueryPartitionSet& out) const {
-    const Node& node = nodes_[id];
-    if (!node.bounds.intersects(q)) return;  // disjoint: in neither list
-    if (!node.leaf) {
-        if (node.left)  descend(*node.left, q, out);
-        if (node.right) descend(*node.right, q, out);
-        return;
-    }
-    if (q.contains_rect(node.bounds)) {
-        out.fully_contained.push_back(node.id);
-    } else {
-        out.partial.push_back(node.id);
-    }
+std::vector<PartitionId> KdTree::roots() const {
+    if (nodes_.empty()) return {};
+    return {0};
 }
 
-QueryPartitionSet KdTree::locate(const HyperRect& q) const {
-    QueryPartitionSet out;
-    if (!nodes_.empty()) descend(/*root=*/0, q, out);
+std::vector<PartitionId> KdTree::children(PartitionId id) const {
+    const Node& node = nodes_.at(id);
+    if (node.leaf) return {};
+    std::vector<PartitionId> out;
+    if (node.left)  out.push_back(*node.left);
+    if (node.right) out.push_back(*node.right);
     return out;
+}
+
+bool KdTree::is_leaf(PartitionId id) const { return nodes_.at(id).leaf; }
+
+Containment KdTree::classify(PartitionId id, const HyperRect& q) const {
+    const Node& node = nodes_.at(id);
+    if (!node.bounds.intersects(q)) return Containment::Disjoint;
+    if (q.contains_rect(node.bounds)) return Containment::Contained;
+    return Containment::Partial;
 }
 
 IndexPos KdTree::partition_range(IndexTable& table, IndexPos start,

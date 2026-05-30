@@ -1,12 +1,20 @@
 // The adaptive access-path abstraction.
 //
 // An access path organizes the index table's points into disjoint,
-// contiguous partitions and answers two questions for the query layer:
-// which partitions a rectangle touches (locate), and how the structure
-// refines under a query (refine). Concrete substrates (an adaptive
-// KD-tree, a static KD-tree, etc.) differ only in how they build
+// contiguous partitions and exposes the navigation primitives the query
+// layer's top-down descent drives: the entry roots, one-level children,
+// per-node classification against a query rectangle, and per-node
+// refinement (cracking) of a partial partition. Concrete substrates (an
+// adaptive KD-tree, a static KD-tree, etc.) differ only in how they build
 // and split; the query engine depends on this interface alone, never on a
 // concrete substrate.
+//
+// The substrate is a pure access path: geometry and partitioning only. It
+// knows nothing about summaries, sampling, or aggregates. The descent that
+// answers a query lives in the query layer, because only it can see the
+// per-partition state and decide where a contained node's stored summary lets
+// the descent stop early. classify() and children() are therefore pure
+// functions of the structure and the query rectangle.
 //
 // Construction is split in two so a substrate's internal build cost is
 // charged to the first query rather than to a separate phase:
@@ -45,18 +53,29 @@ public:
     /// call, no-op thereafter. Idempotent.
     virtual void ensure_built() = 0;
 
-    /// Classify the active partitions against `q`: fully contained vs
-    /// partially overlapping. Disjoint partitions appear in neither list.
-    virtual QueryPartitionSet locate(const HyperRect& q) const = 0;
+    /// Entry points of the descent. The KD substrates have a single root.
+    virtual std::vector<PartitionId> roots() const = 0;
 
-    /// Refine the structure for `q` by splitting boundary partitions whose
-    /// size exceeds the substrate's threshold. Returns the ids of parents
-    /// that retired in the process (their summaries are retained by the
-    /// caller) together with the post-refinement classification of the
-    /// active frontier against `q`, so the caller need not walk the
-    /// structure again to re-derive what `locate(q)` would now report.
-    /// Never reads measures.
-    virtual RefineResult refine(const HyperRect& q, IndexTable& table) = 0;
+    /// The partition's children one level down, in left-to-right order;
+    /// empty for a leaf. The inverse of parent().
+    virtual std::vector<PartitionId> children(PartitionId id) const = 0;
+
+    /// True iff `id` has no children (== children(id).empty()).
+    virtual bool is_leaf(PartitionId id) const = 0;
+
+    /// Classify one partition's bounds against `q`: disjoint, fully
+    /// contained, or partially overlapping. Pure geometry.
+    virtual Containment classify(PartitionId id, const HyperRect& q) const = 0;
+
+    /// Refine the partial partition `id` for `q` by cracking it when its
+    /// population exceeds the substrate's threshold, isolating the query
+    /// rectangle so later queries over the same region reuse fully-contained
+    /// children. Returns the ids of parents that retired in the process
+    /// (their summaries are retained by the caller). A non-adaptive substrate
+    /// is a no-op returning {}. Never reads measures. The caller descends into
+    /// the resulting children() afterwards.
+    virtual std::vector<PartitionId> refine(PartitionId id, const HyperRect& q,
+                                            IndexTable& table) = 0;
 
     /// Snapshot of a partition by id; valid for retired ids too
     /// (`active == false`).

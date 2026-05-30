@@ -213,6 +213,7 @@ TEST(QueryEngine, ApproximateLoopCertifiesIntervals) {
     const double rel = 0.25;
     const RangeQuery q = query(0.0, 20.0, 0.0, 20.0, rel);
     const QueryResult got = engine.execute(q, 7);
+    const QueryResult oracle = exact_scan(*f.store, f.schema, q);
 
     EXPECT_TRUE(got.metrics.target_satisfied);
     for (const auto& e : got.aggregates) {
@@ -221,9 +222,20 @@ TEST(QueryEngine, ApproximateLoopCertifiesIntervals) {
         EXPECT_LE(e.ci_low, e.estimate);
         EXPECT_LE(e.estimate, e.ci_high);
         EXPECT_GT(e.effective_df, 0.0);
+
+        // The interval must not merely be self-consistent: the point estimate
+        // has to land near the true value. With a fixed seed this is
+        // deterministic, so a few half-widths of slack guards the calibration
+        // without flaking.
+        const auto& o = find(oracle, e.op, e.measure_id);
+        if (std::isnan(o.estimate)) continue;
+        const double half_width = 0.5 * (e.ci_high - e.ci_low);
+        EXPECT_LE(std::abs(e.estimate - o.estimate), 4.0 * half_width)
+            << "estimate far from truth for op " << static_cast<int>(e.op);
     }
     const std::string& s = got.metrics.status;
     EXPECT_TRUE(s == "converged" || s == "exactified");
+
 }
 
 TEST(QueryEngine, TightTargetFallsBackToExact) {

@@ -89,6 +89,9 @@ struct DecompositionResult {
     QueryDecomposition decomposition;
     ExactBucket        exact_bucket;
     std::uint64_t      total_count = 0;  // COUNT(*): all qualifying objects, incl. missing
+    std::uint64_t      nodes_visited = 0;       // descent nodes classified (incl. dropped)
+    std::uint64_t      partitions_split = 0;     // parents retired by refinement during the descent
+    std::uint64_t      partitions_touched = 0;   // leaf-level partitions emitted as contributors/strata
 };
 
 }  // namespace a3i

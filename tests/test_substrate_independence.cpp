@@ -70,14 +70,24 @@ TEST(SubstrateIndependence, EverySubstrateUpholdsInvariants) {
 
         // A whole-domain query must classify every active partition as
         // fully contained and leave nothing partial.
-        QueryPartitionSet full = path->locate(HyperRect{{{-1.0, 11.0}, {-1.0, 11.0}}});
-        EXPECT_EQ(full.fully_contained.size(), path->active_partitions().size());
-        EXPECT_TRUE(full.partial.empty());
+        std::size_t contained = 0;
+        std::size_t partial   = 0;
+        const HyperRect whole{{{-1.0, 11.0}, {-1.0, 11.0}}};
+        for (PartitionId pid : path->active_partitions()) {
+            switch (path->classify(pid, whole)) {
+                case Containment::Contained: ++contained; break;
+                case Containment::Partial:   ++partial;   break;
+                case Containment::Disjoint:               break;
+            }
+        }
+        EXPECT_EQ(contained, path->active_partitions().size());
+        EXPECT_EQ(partial, 0u);
 
         // A disjoint query touches nothing.
-        QueryPartitionSet none = path->locate(HyperRect{{{20.0, 30.0}, {20.0, 30.0}}});
-        EXPECT_TRUE(none.fully_contained.empty());
-        EXPECT_TRUE(none.partial.empty());
+        const HyperRect far{{{20.0, 30.0}, {20.0, 30.0}}};
+        for (PartitionId pid : path->active_partitions()) {
+            EXPECT_EQ(path->classify(pid, far), Containment::Disjoint);
+        }
     }
 }
 

@@ -23,8 +23,21 @@ void AdaptiveKdAccessPath::ensure_built() {
     built_ = true;
 }
 
-QueryPartitionSet AdaptiveKdAccessPath::locate(const HyperRect& q) const {
-    return tree_.locate(q);
+std::vector<PartitionId> AdaptiveKdAccessPath::roots() const {
+    return tree_.roots();
+}
+
+std::vector<PartitionId> AdaptiveKdAccessPath::children(PartitionId id) const {
+    return tree_.children(id);
+}
+
+bool AdaptiveKdAccessPath::is_leaf(PartitionId id) const {
+    return tree_.is_leaf(id);
+}
+
+Containment AdaptiveKdAccessPath::classify(PartitionId id,
+                                           const HyperRect& q) const {
+    return tree_.classify(id, q);
 }
 
 PartitionId AdaptiveKdAccessPath::crack_partition_to_query(PartitionId id,
@@ -54,40 +67,25 @@ PartitionId AdaptiveKdAccessPath::crack_partition_to_query(PartitionId id,
     return cur;
 }
 
-RefineResult AdaptiveKdAccessPath::refine(const HyperRect& q, IndexTable& table) {
+std::vector<PartitionId> AdaptiveKdAccessPath::refine(PartitionId id,
+                                                     const HyperRect& q,
+                                                     IndexTable& table) {
     ensure_built();
     if (&table != table_) {
         throw std::invalid_argument("AdaptiveKdAccessPath::refine table differs from prepared table");
     }
 
-    RefineResult result;
-    // One structural descent: classify the current active frontier. The
-    // post-refinement frontier is then derived from this without a second
-    // descent, because cracking only ever transforms a partial partition.
-    const QueryPartitionSet located = locate(q);
-
-    // Fully-contained partitions are never cracked, so they carry straight
-    // over into the new frontier unchanged.
-    result.frontier.fully_contained = located.fully_contained;
-
-    for (PartitionId pid : located.partial) {
-        if (tree_.population(pid) <= config_.refinement_threshold) {
-            // Too small to crack: stays a boundary partition on the frontier.
-            result.frontier.partial.push_back(pid);
-            continue;
-        }
-        // Crack toward the query. Every slab the crack discards lies wholly
-        // outside `q` on some axis (disjoint), so the only frontier member
-        // this partition contributes is its single surviving boundary child.
-        const PartitionId survivor =
-            crack_partition_to_query(pid, q, result.retired);
-        if (q.contains_rect(tree_.node(survivor).bounds)) {
-            result.frontier.fully_contained.push_back(survivor);
-        } else {
-            result.frontier.partial.push_back(survivor);
-        }
+    std::vector<PartitionId> retired;
+    if (tree_.population(id) <= config_.refinement_threshold) {
+        // Too small to crack: the caller treats it as a boundary leaf.
+        return retired;
     }
-    return result;
+    // Crack toward the query, isolating its rectangle. Every slab the crack
+    // discards lies wholly outside `q` on some axis, so the descent that
+    // follows reclassifies the resulting children: the discarded slabs as
+    // disjoint, the surviving boundary child as contained or a smaller partial.
+    crack_partition_to_query(id, q, retired);
+    return retired;
 }
 
 PartitionView AdaptiveKdAccessPath::partition(PartitionId id) const {

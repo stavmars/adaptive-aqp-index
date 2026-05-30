@@ -47,6 +47,13 @@ public:
     /// is unknown).
     const MeasureSummary* find(PartitionId id, MeasureId mid) const;
 
+    /// True iff `id` carries a complete (exact) summary for every one of the
+    /// first `measure_count` measures. A contained node that is complete can
+    /// answer its whole sub-tree from its stored summaries, so the descent
+    /// stops there. False for an unknown partition or any absent/partial
+    /// summary.
+    bool is_complete(PartitionId id, std::size_t measure_count) const;
+
     /// Summary for the pair, creating an absent one bound to the partition's
     /// shared tracker (sized `population_size`) on first use. `population_size`
     /// must agree across a partition's measures.

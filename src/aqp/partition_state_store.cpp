@@ -42,6 +42,18 @@ const MeasureSummary* PartitionStateStore::find(PartitionId id,
     return slot ? &*slot : nullptr;
 }
 
+bool PartitionStateStore::is_complete(PartitionId id,
+                                      std::size_t measure_count) const {
+    if (id >= states_by_partition_.size()) return false;
+    const auto& summaries = states_by_partition_[id].summaries_by_measure;
+    if (summaries.size() < measure_count) return false;
+    for (std::size_t mid = 0; mid < measure_count; ++mid) {
+        const auto& slot = summaries[mid];
+        if (!slot || !slot->complete()) return false;
+    }
+    return true;
+}
+
 MeasureSummary& PartitionStateStore::get_or_create(
     PartitionId id, MeasureId mid, std::uint64_t population_size) {
     auto& st = state(id);

@@ -7,12 +7,12 @@
 // exactly under the half-open [low, high) convention. Leaves are the live
 // partitions; retired parents are kept for ancestry.
 //
-// Two substrates grow this same structure and answer locate/partition/
-// parent/active identically. They differ only in which pivots they choose
-// and when: one splits incrementally on query bounds, the other splits once
-// on median values at build time. The choice-and-timing logic lives in the
-// substrates; the node layout, the in-place value partition, and the read
-// traversal live here.
+// Two substrates grow this same structure and answer classify/children/
+// partition/parent/active identically. They differ only in which pivots they
+// choose and when: one splits incrementally on query bounds, the other splits
+// once on median values at build time. The choice-and-timing logic lives in
+// the substrates; the node layout, the in-place value partition, and the
+// navigation primitives live here.
 
 #pragma once
 
@@ -50,9 +50,18 @@ public:
 
     bool empty() const { return nodes_.empty(); }
 
-    /// Classify every active leaf against `q`: fully-contained or partial.
-    /// Disjoint leaves appear in neither list.
-    QueryPartitionSet locate(const HyperRect& q) const;
+    /// Entry points of a descent: the single root id {0} when non-empty.
+    std::vector<PartitionId> roots() const;
+
+    /// Children of a node, left then right; empty for a leaf.
+    std::vector<PartitionId> children(PartitionId id) const;
+
+    /// True iff `id` is a leaf (no children).
+    bool is_leaf(PartitionId id) const;
+
+    /// Classify one node's bounds against `q`: disjoint, fully contained, or
+    /// partially overlapping. Pure geometry, valid for any node id.
+    Containment classify(PartitionId id, const HyperRect& q) const;
 
     /// Read-only view of a node, valid for retired ids too (active = false).
     PartitionView partition(PartitionId id) const;
@@ -60,7 +69,7 @@ public:
     /// Ids of the live (active leaf) partitions. Scans every node and
     /// allocates a fresh vector, so its cost grows with the total node count
     /// (live + retired). Intended for enumeration and tests; do NOT call it
-    /// on a per-query path. Per-query strata come from locate()/refine().
+    /// on a per-query path.
     std::vector<PartitionId> active_partitions() const;
 
     /// Parent id of a node, or nullopt for the root.
@@ -90,9 +99,6 @@ private:
     // == end when every point lands on one side).
     IndexPos partition_range(IndexTable& table, IndexPos start, IndexPos end,
                              DimensionId axis, double pivot) const;
-
-    void descend(PartitionId id, const HyperRect& q,
-                 QueryPartitionSet& out) const;
 
     std::vector<Node> nodes_;  ///< Indexed by PartitionId (dense, append-only).
 };

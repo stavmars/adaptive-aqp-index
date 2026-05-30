@@ -56,18 +56,32 @@ void StaticKdAccessPath::ensure_built() {
     built_ = true;
 }
 
-QueryPartitionSet StaticKdAccessPath::locate(const HyperRect& q) const {
-    return tree_.locate(q);
+std::vector<PartitionId> StaticKdAccessPath::roots() const {
+    return tree_.roots();
 }
 
-RefineResult StaticKdAccessPath::refine(const HyperRect& q, IndexTable& table) {
+std::vector<PartitionId> StaticKdAccessPath::children(PartitionId id) const {
+    return tree_.children(id);
+}
+
+bool StaticKdAccessPath::is_leaf(PartitionId id) const {
+    return tree_.is_leaf(id);
+}
+
+Containment StaticKdAccessPath::classify(PartitionId id,
+                                         const HyperRect& q) const {
+    return tree_.classify(id, q);
+}
+
+std::vector<PartitionId> StaticKdAccessPath::refine(PartitionId /*id*/,
+                                                    const HyperRect& /*q*/,
+                                                    IndexTable& table) {
     ensure_built();
     if (&table != table_) {
         throw std::invalid_argument("StaticKdAccessPath::refine table differs from prepared table");
     }
-    // The structure is fixed: nothing is cracked and no parent retires. The
-    // frontier is just the current classification of the query.
-    return RefineResult{/*retired=*/{}, tree_.locate(q)};
+    // The structure is fixed: nothing is cracked and no parent retires.
+    return {};
 }
 
 PartitionView StaticKdAccessPath::partition(PartitionId id) const {
