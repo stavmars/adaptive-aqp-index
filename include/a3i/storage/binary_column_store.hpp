@@ -30,7 +30,17 @@ class BinaryColumnStore {
 public:
     /// Open a prepared dataset by manifest path. Eagerly loads dimensions
     /// into memory; mmaps every measure column with MADV_RANDOM.
-    explicit BinaryColumnStore(const std::filesystem::path& manifest_path);
+    ///
+    /// `selected_measures` chooses which measure columns to expose, in the
+    /// given order: the store then reports `measure_count()` of them and the
+    /// measure accessors (`measure_value`, `gather`, `global_stats`) take a
+    /// local id in `[0, selected_measures.size())`. An empty list (the
+    /// default) exposes every measure in manifest order. Each id must be a
+    /// valid index into the manifest's measures; the policy that decides the
+    /// subset lives entirely in the caller. `manifest()` still returns the
+    /// full artifact metadata regardless of the selection.
+    explicit BinaryColumnStore(const std::filesystem::path& manifest_path,
+                               std::vector<MeasureId> selected_measures = {});
     ~BinaryColumnStore();
 
     BinaryColumnStore(const BinaryColumnStore&) = delete;
@@ -41,7 +51,7 @@ public:
 
     std::size_t row_count() const noexcept { return manifest_.row_count; }
     std::size_t dimension_count() const noexcept { return manifest_.dimensions.size(); }
-    std::size_t measure_count() const noexcept { return manifest_.measures.size(); }
+    std::size_t measure_count() const noexcept { return exposed_measures_.size(); }
 
     /// In-memory contiguous view of one dimension column.
     std::span<const double> dimension_column(DimensionId d) const;
@@ -72,7 +82,8 @@ private:
     Manifest manifest_;
     std::filesystem::path manifest_dir_;
     std::vector<std::vector<double>> dim_columns_;  ///< Eager copies.
-    std::vector<MmapRegion> measure_regions_;       ///< One per measure.
+    std::vector<MmapRegion> measure_regions_;       ///< One per exposed measure.
+    std::vector<MeasureId>  exposed_measures_;      ///< Local id -> manifest measure index.
 };
 
 }  // namespace a3i

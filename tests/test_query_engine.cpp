@@ -175,6 +175,55 @@ TEST(QueryEngine, ForceExactReproducesOracle) {
     EXPECT_EQ(got.metrics.exactify_cause, "none");
 }
 
+TEST(QueryEngine, SelectedMeasureSubsetServesOnlyThoseMeasures) {
+    Fixture f;
+    const RangeQuery q = query(2.0, 12.0, 3.0, 17.0, /*rel=*/0.05);
+
+    // Full store: both measures.
+    IndexTable table = f.make_table();
+    AdaptiveKdAccessPath path(f.substrate());
+    path.prepare(table);
+    EngineConfig cfg;
+    cfg.accuracy_mode = EngineConfig::AccuracyMode::ForceExact;
+    QueryEngine full_engine(*f.store, table, path, cfg);
+    const QueryResult full = full_engine.execute(q, /*ordinal=*/1);
+
+    // A store exposing only the first measure (the selection policy lives in
+    // the caller; here it is "first measure"). The engine sees a one-measure
+    // dataset and concerns itself with nothing else.
+    BinaryColumnStore subset(f.schema.binary_manifest_path,
+                             std::vector<MeasureId>{0});
+    EXPECT_EQ(subset.measure_count(), static_cast<std::size_t>(1));
+
+    IndexTable table2 = f.make_table();
+    AdaptiveKdAccessPath path2(f.substrate());
+    path2.prepare(table2);
+    QueryEngine sub_engine(subset, table2, path2, cfg);
+    const QueryResult sub = sub_engine.execute(q, /*ordinal=*/1);
+
+    // Three aggregates for measure 0 plus COUNT(*); the second measure is gone.
+    EXPECT_EQ(sub.aggregates.size(), static_cast<std::size_t>(3 * 1 + 1));
+    for (const auto& e : sub.aggregates) {
+        EXPECT_TRUE(e.op == AggregateOp::CountStar || e.measure_id == 0u);
+    }
+
+    // Measure 0's answers (and COUNT(*)) match the full run exactly.
+    for (AggregateOp op : {AggregateOp::Sum, AggregateOp::CountMeasure,
+                           AggregateOp::Avg}) {
+        EXPECT_DOUBLE_EQ(find(sub, op, 0).estimate, find(full, op, 0).estimate)
+            << static_cast<int>(op);
+    }
+    EXPECT_DOUBLE_EQ(find(sub, AggregateOp::CountStar, 0).estimate,
+                     find(full, AggregateOp::CountStar, 0).estimate);
+
+    // And they match the oracle over a schema truncated to {m0} — the same
+    // truncation the experiment runner pairs with the measure subset.
+    DatasetSchema m0_schema = f.schema;
+    m0_schema.measure_names = {"m0"};
+    const QueryResult oracle = exact_scan(subset, m0_schema, q);
+    expect_matches_oracle(sub, oracle);
+}
+
 TEST(QueryEngine, ForceExactEmptyRectangle) {
     Fixture f;
     IndexTable table = f.make_table();

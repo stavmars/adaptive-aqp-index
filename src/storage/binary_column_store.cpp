@@ -4,6 +4,7 @@
 #include <cstring>
 #include <fstream>
 #include <stdexcept>
+#include <string>
 #include <system_error>
 
 #include <fcntl.h>
@@ -41,9 +42,30 @@ std::vector<double> read_double_file(const std::filesystem::path& path,
 
 }  // namespace
 
-BinaryColumnStore::BinaryColumnStore(const std::filesystem::path& manifest_path)
+BinaryColumnStore::BinaryColumnStore(const std::filesystem::path& manifest_path,
+                                     std::vector<MeasureId> selected_measures)
     : manifest_(read_manifest(manifest_path)),
       manifest_dir_(manifest_path.parent_path()) {
+
+    // Resolve which measure columns to expose. An empty selection means every
+    // measure in manifest order; otherwise the caller's list fixes both the
+    // membership and the local id order. Validate against the manifest so an
+    // out-of-range id fails at open time rather than on first access.
+    if (selected_measures.empty()) {
+        exposed_measures_.resize(manifest_.measures.size());
+        for (std::size_t i = 0; i < manifest_.measures.size(); ++i) {
+            exposed_measures_[i] = static_cast<MeasureId>(i);
+        }
+    } else {
+        for (MeasureId m : selected_measures) {
+            if (m >= manifest_.measures.size()) {
+                throw std::out_of_range(
+                    "BinaryColumnStore: selected measure id out of range: " +
+                    std::to_string(m));
+            }
+        }
+        exposed_measures_ = std::move(selected_measures);
+    }
 
     // Dimension columns are loaded eagerly: the adaptive index needs to read,
     // sort, and permute coordinates freely in RAM during grid construction and
@@ -60,9 +82,11 @@ BinaryColumnStore::BinaryColumnStore(const std::filesystem::path& manifest_path)
     // MADV_RANDOM tells the kernel not to read-ahead past the touched page —
     // appropriate for point-lookups. Callers that will sweep a contiguous range
     // should promote the relevant region to MADV_SEQUENTIAL / MADV_WILLNEED before calling gather().
-    measure_regions_.resize(manifest_.measures.size());
-    for (std::size_t i = 0; i < manifest_.measures.size(); ++i) {
-        const auto path = manifest_dir_ / manifest_.measures[i].file;
+    // Only the exposed measures are mapped; the rest stay untouched on disk.
+    measure_regions_.resize(exposed_measures_.size());
+    for (std::size_t i = 0; i < exposed_measures_.size(); ++i) {
+        const auto& mz = manifest_.measures[exposed_measures_[i]];
+        const auto path = manifest_dir_ / mz.file;
         const auto bytes = manifest_.row_count * sizeof(double);
 
         int fd = ::open(path.c_str(), O_RDONLY);
@@ -149,10 +173,10 @@ void BinaryColumnStore::gather(MeasureId m,
 }
 
 const GlobalMeasureStats& BinaryColumnStore::global_stats(MeasureId m) const {
-    if (m >= manifest_.measures.size()) {
+    if (m >= exposed_measures_.size()) {
         throw std::out_of_range("global_stats: MeasureId out of range");
     }
-    return manifest_.measures[m].global;
+    return manifest_.measures[exposed_measures_[m]].global;
 }
 
 }  // namespace a3i

@@ -44,6 +44,7 @@ add_library(a3i_core STATIC
     src/tools/csv_to_parquet.cpp
     src/tools/synthetic_generator.cpp
     src/experiments/truth_store.cpp
+    src/experiments/workload_generator.cpp
     src/access_path/substrate_factory.cpp
     src/substrates/kd_tree.cpp
     src/substrates/adaptive_kd_access_path.cpp
@@ -88,6 +89,11 @@ set_target_properties(csv_to_parquet PROPERTIES
 add_executable(generate_dataset tools/generate_dataset.cpp)
 target_link_libraries(generate_dataset PRIVATE a3i_core)
 set_target_properties(generate_dataset PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tools)
+
+add_executable(generate_workload tools/generate_workload.cpp)
+target_link_libraries(generate_workload PRIVATE a3i_core)
+set_target_properties(generate_workload PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tools)
 
 # ---- Tests ---------------------------------------------------------------
