@@ -23,7 +23,8 @@
 #include "a3i/storage/binary_column_store.hpp"
 #include "a3i/storage/index_table.hpp"
 #include "a3i/substrates/adaptive_kd_access_path.hpp"
-#include "a3i/tools/csv_to_columns_pipeline.hpp"
+#include "a3i/tools/parquet_to_columns_pipeline.hpp"
+#include "a3i/tools/csv_to_parquet.hpp"
 
 namespace fs = std::filesystem;
 
@@ -82,16 +83,24 @@ struct Fixture {
         true_count = static_cast<double>(kRows);
         true_avg   = true_sum / true_count;
 
+        const auto parquet = tmp / "data.parquet";
+        {
+            CsvToParquetOptions po;
+            po.input_path  = csv;
+            po.output_path = parquet;
+            po.has_header  = true;
+            po.delimiter   = ',';
+            po.overwrite   = true;
+            csv_to_parquet(po);
+        }
         ConvertOptions opts;
-        opts.input_csv  = csv;
+        opts.input_parquet = parquet;
         opts.output_dir = tmp / "prepared";
         opts.dataset_id = "stat_smoke";
-        opts.has_header = true;
-        opts.delimiter  = ',';
         opts.dimensions = {{"x", 0.0, xhi}, {"y", 0.0, 1.0}};
         opts.measures   = {"m"};
         opts.overwrite  = true;
-        const auto report = run_csv_to_columns(opts);
+        const auto report = run_parquet_to_columns(opts);
 
         store.emplace(report.manifest_path);
         schema.dimension_names      = {"x", "y"};

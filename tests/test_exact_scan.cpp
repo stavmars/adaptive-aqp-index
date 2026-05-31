@@ -19,7 +19,8 @@
 #include "a3i/core/schema.hpp"
 #include "a3i/experiments/truth_store.hpp"
 #include "a3i/storage/binary_column_store.hpp"
-#include "a3i/tools/csv_to_columns_pipeline.hpp"
+#include "a3i/tools/parquet_to_columns_pipeline.hpp"
+#include "a3i/tools/csv_to_parquet.hpp"
 
 namespace fs = std::filesystem;
 
@@ -70,16 +71,24 @@ struct Fixture {
             std::ofstream o(csv, std::ios::binary | std::ios::trunc);
             o << kCsv;
         }
+        const auto parquet = tmp / "data.parquet";
+        {
+            a3i::CsvToParquetOptions po;
+            po.input_path  = csv;
+            po.output_path = parquet;
+            po.has_header  = true;
+            po.delimiter   = ',';
+            po.overwrite   = true;
+            a3i::csv_to_parquet(po);
+        }
         a3i::ConvertOptions opts;
-        opts.input_csv  = csv;
+        opts.input_parquet = parquet;
         opts.output_dir = tmp / "prepared";
         opts.dataset_id = "fixture";
-        opts.has_header = true;
-        opts.delimiter  = ',';
         opts.dimensions = {{"x", 0.0, 3.0}, {"y", 0.0, 3.0}};
         opts.measures   = {"m0", "m1"};
         opts.overwrite  = true;
-        const auto report = a3i::run_csv_to_columns(opts);
+        const auto report = a3i::run_parquet_to_columns(opts);
 
         store.emplace(report.manifest_path);
         schema.dimension_names    = {"x", "y"};

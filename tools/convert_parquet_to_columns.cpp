@@ -1,61 +1,48 @@
-// Offline CSV -> binary column converter.
+// Offline Parquet -> binary column converter.
 //
-// Run once per dataset (or once per --max-rows variant); never invoked
-// from the runner. Writes columns/<...>.bin and manifest.json under the
-// resolved output directory. See --help for usage and examples.
+// Run once per dataset (or once per --max-rows / filter variant); never
+// invoked from the runner. Reads the dataset's typed Parquet,
+// projects the requested columns by name, applies the row survival rule
+// (domain bounds plus drop filters), and writes columns/<...>.bin plus
+// manifest.json under the resolved output directory. See --help for usage.
 
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
-#include "a3i/tools/csv_to_columns_pipeline.hpp"
+#include "a3i/tools/parquet_to_columns_pipeline.hpp"
 
 namespace {
 
 void print_usage(std::ostream& os) {
     os <<
-"Usage: convert_csv_to_columns --input <csv> --dataset-id <id>\n"
+"Usage: convert_parquet_to_columns --input <parquet> --dataset-id <id>\n"
 "                              (--output-dir <dir> | --prepared-root <root>)\n"
-"                              [--has-header] [--delimiter <ch>] [--null-string <s>]\n"
 "                              --dimension <name>:<lo>:<hi>   (one or more, repeatable)\n"
 "                              --measure   <name>             (one or more, repeatable)\n"
-"                              [--validation-filter '<name><op><value>']  (repeatable)\n"
+"                              [--drop-if '<name><op><value>']  (repeatable)\n"
 "                              [--max-rows <N>] [--overwrite]\n"
 "\n"
-"Resolves columns by name. With --has-header, names come from the header line.\n"
-"Without --has-header, names are synthesized DuckDB-style: 'column' + zero-padded\n"
-"index (e.g. column00..column17 for an 18-column file; column0..column9 for 10).\n"
+"Reads the dataset's Parquet (produced once by csv_to_parquet or the\n"
+"synthetic generator) and resolves every column by name against its schema.\n"
 "\n"
 "Output directory precedence: --output-dir > --prepared-root/<dataset-id> > error.\n"
 "Per-column file paths in the manifest are relative to the manifest's directory.\n"
 "\n"
-"Validation filters DROP rows matching the predicate, e.g. 'NUMBER_OBSERVERS<1.0'.\n"
-"Operators: < <= > >= == !=  (single = and 0 != are not accepted).\n"
+"A row survives iff every dimension is within its [lo, hi] bounds and no drop-if\n"
+"predicate matches. Drop predicates remove rows, e.g. 'NUMBER_OBSERVERS<1.0'.\n"
+"Operators: < <= > >= == !=.\n"
 "\n"
-"Examples (one-off per dataset):\n"
-"\n"
-"  # 1M-row prefix of synth10 (headerless; DuckDB-style names)\n"
-"  convert_csv_to_columns --input /data/synth10_10M.csv \\\n"
-"     --dataset-id synth10_1M --prepared-root /data/prepared --delimiter , \\\n"
-"     --dimension column0:0:1000 --dimension column1:0:1000 \\\n"
-"     --measure column2 --measure column3 --measure column4 --measure column5 \\\n"
-"     --measure column6 --measure column7 --measure column8 --measure column9 \\\n"
-"     --max-rows 1000000\n"
-"\n"
-"  # taxi (headered)\n"
-"  convert_csv_to_columns --input /data/yellow_tripdata_2013_2014_cleaned.csv \\\n"
-"     --dataset-id taxi --prepared-root /data/prepared --has-header --delimiter , \\\n"
+"Example:\n"
+"  convert_parquet_to_columns --input /data/parquet/taxi.parquet \\\n"
+"     --dataset-id taxi --prepared-root /data/prepared \\\n"
 "     --dimension pickup_lon:-74.106216:-73.842545 \\\n"
 "     --dimension pickup_lat:40.676993:40.839788 \\\n"
-"     --measure fare_amount --measure total_amount \\\n"
-"     --measure trip_distance --measure passenger_count\n";
+"     --measure fare_amount --measure total_amount\n";
 }
-
-// --- Argument helpers ----------------------------------------------------
 
 bool eat_flag(int& i, int argc, char** argv, std::string_view name) {
     if (i < argc && argv[i] == name) { ++i; return true; }
@@ -113,11 +100,11 @@ a3i::ValidationFilter parse_filter(std::string_view s) {
             f.name  = std::string(s.substr(0, pos));
             f.op    = op;
             f.value = std::stod(std::string(s.substr(pos + tok.size())));
-            if (f.name.empty()) throw std::runtime_error("--validation-filter missing name");
+            if (f.name.empty()) throw std::runtime_error("--drop-if missing name");
             return f;
         }
     }
-    throw std::runtime_error("--validation-filter must use one of < <= > >= == !=");
+    throw std::runtime_error("--drop-if must use one of < <= > >= == !=");
 }
 
 }  // namespace
@@ -129,30 +116,26 @@ int main(int argc, char** argv) try {
     }
 
     a3i::ConvertOptions opts;
-    std::string input_csv, output_dir, prepared_root, dataset_id;
-    std::string delimiter_str = ",";
+    std::string input_parquet, output_dir, prepared_root, dataset_id;
     std::string max_rows_str;
 
     int i = 1;
     while (i < argc) {
         std::string val;
-        if (eat_kv(i, argc, argv, "--input",         val)) { input_csv = val; continue; }
+        if (eat_kv(i, argc, argv, "--input",         val)) { input_parquet = val; continue; }
         if (eat_kv(i, argc, argv, "--output-dir",    val)) { output_dir = val; continue; }
         if (eat_kv(i, argc, argv, "--prepared-root", val)) { prepared_root = val; continue; }
         if (eat_kv(i, argc, argv, "--dataset-id",    val)) { dataset_id = val; continue; }
-        if (eat_kv(i, argc, argv, "--delimiter",     val)) { delimiter_str = val; continue; }
-        if (eat_kv(i, argc, argv, "--null-string",   val)) { opts.null_string = val; continue; }
         if (eat_kv(i, argc, argv, "--max-rows",      val)) { max_rows_str = val; continue; }
         if (eat_kv(i, argc, argv, "--dimension",     val)) { opts.dimensions.push_back(parse_dimension(val)); continue; }
         if (eat_kv(i, argc, argv, "--measure",       val)) { opts.measures.push_back(val); continue; }
-        if (eat_kv(i, argc, argv, "--validation-filter", val)) { opts.validation_filters.push_back(parse_filter(val)); continue; }
-        if (eat_flag(i, argc, argv, "--has-header")) { opts.has_header = true; continue; }
+        if (eat_kv(i, argc, argv, "--drop-if",       val)) { opts.validation_filters.push_back(parse_filter(val)); continue; }
         if (eat_flag(i, argc, argv, "--overwrite"))  { opts.overwrite  = true; continue; }
         throw std::runtime_error("unrecognized argument: " + std::string(argv[i]));
     }
 
-    if (input_csv.empty())  throw std::runtime_error("--input is required");
-    if (dataset_id.empty()) throw std::runtime_error("--dataset-id is required");
+    if (input_parquet.empty()) throw std::runtime_error("--input is required");
+    if (dataset_id.empty())    throw std::runtime_error("--dataset-id is required");
     if (output_dir.empty()) {
         if (prepared_root.empty()) {
             throw std::runtime_error("either --output-dir or --prepared-root is required");
@@ -160,19 +143,12 @@ int main(int argc, char** argv) try {
         output_dir = (std::filesystem::path(prepared_root) / dataset_id).string();
     }
 
-    // --delimiter accepts: literal char, "\t", "tab".
-    char delim = ',';
-    if (delimiter_str == "\\t" || delimiter_str == "tab") delim = '\t';
-    else if (delimiter_str.size() == 1)                    delim = delimiter_str[0];
-    else throw std::runtime_error("--delimiter must be a single char (use 'tab' or '\\t' for TSV)");
-
-    opts.input_csv  = input_csv;
-    opts.output_dir = output_dir;
-    opts.dataset_id = dataset_id;
-    opts.delimiter  = delim;
+    opts.input_parquet = input_parquet;
+    opts.output_dir    = output_dir;
+    opts.dataset_id    = dataset_id;
     if (!max_rows_str.empty()) opts.max_rows = std::stoull(max_rows_str);
 
-    const auto rep = a3i::run_csv_to_columns(opts);
+    const auto rep = a3i::run_parquet_to_columns(opts);
     std::cout << "wrote " << rep.manifest_path << '\n'
               << "  rows_written=" << rep.rows_written
               << "  rows_read=" << rep.rows_read
@@ -180,6 +156,6 @@ int main(int argc, char** argv) try {
     return 0;
 }
 catch (const std::exception& e) {
-    std::cerr << "convert_csv_to_columns: " << e.what() << '\n';
+    std::cerr << "convert_parquet_to_columns: " << e.what() << '\n';
     return 1;
 }

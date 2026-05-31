@@ -40,6 +40,21 @@ a3i_add_test(test_query_engine test_query_engine.cpp)
 a3i_add_test(test_differential test_differential.cpp)
 a3i_add_test(test_methods test_methods.cpp)
 
+# Parquet front-end: the CSV/TSV -> Parquet converter and the seeded
+# synthetic generator. The per-test entries run in the fast `unit` gate; the
+# whole-suite entries below carry the `m_source_parquet` label so the
+# data-ingestion path can also be exercised on its own.
+a3i_add_test(test_csv_to_parquet test_csv_to_parquet.cpp)
+a3i_add_test(test_synthetic_generator test_synthetic_generator.cpp)
+
+add_test(NAME m_source_parquet.csv_to_parquet COMMAND test_csv_to_parquet)
+add_test(NAME m_source_parquet.synthetic_generator COMMAND test_synthetic_generator)
+set_tests_properties(
+    m_source_parquet.csv_to_parquet
+    m_source_parquet.synthetic_generator
+    PROPERTIES LABELS m_source_parquet
+)
+
 # Statistical gate: seeded sanity plus the empirical CI-coverage sweep
 # (including the recorded heavy-tail under-coverage). Kept out of the fast
 # `unit` label because it runs many seeds.

@@ -17,7 +17,8 @@
 
 #include "a3i/storage/binary_column_store.hpp"
 #include "a3i/storage/manifest.hpp"
-#include "a3i/tools/csv_to_columns_pipeline.hpp"
+#include "a3i/tools/parquet_to_columns_pipeline.hpp"
+#include "a3i/tools/csv_to_parquet.hpp"
 
 namespace fs = std::filesystem;
 
@@ -51,28 +52,45 @@ void write_text(const fs::path& p, std::string_view content) {
     o.write(content.data(), static_cast<std::streamsize>(content.size()));
 }
 
+// Run the one-off CSV -> Parquet step so the converter (which now
+// reads Parquet) can consume a tiny text fixture. Returns the Parquet path.
+fs::path to_parquet(const fs::path& csv, bool has_header, char delimiter = ',',
+                    const std::string& null_string = "") {
+    fs::path pq = csv;
+    pq.replace_extension(".parquet");
+    a3i::CsvToParquetOptions po;
+    po.input_path  = csv;
+    po.output_path = pq;
+    po.has_header  = has_header;
+    po.delimiter   = delimiter;
+    po.null_string = null_string;
+    po.overwrite   = true;
+    a3i::csv_to_parquet(po);
+    return pq;
+}
+
 }  // namespace
 
-// --- duckdb_default_column_names ----------------------------------------
+// --- default_column_names -----------------------------------------------
 
-TEST(DuckdbColumnNames, PaddingByDigitWidth) {
-    using a3i::duckdb_default_column_names;
+TEST(DefaultColumnNames, PaddingByDigitWidth) {
+    using a3i::default_column_names;
     {
-        auto names = duckdb_default_column_names(10);
+        auto names = default_column_names(10);
         // 10 cols -> indices 0..9, single-digit width -> column0..column9
         ASSERT_EQ(names.size(), 10u);
         EXPECT_EQ(names.front(), "column0");
         EXPECT_EQ(names.back(),  "column9");
     }
     {
-        auto names = duckdb_default_column_names(18);
+        auto names = default_column_names(18);
         // 18 cols -> indices 0..17, two-digit width -> column00..column17
         ASSERT_EQ(names.size(), 18u);
         EXPECT_EQ(names.front(), "column00");
         EXPECT_EQ(names.back(),  "column17");
     }
     {
-        auto names = duckdb_default_column_names(100);
+        auto names = default_column_names(100);
         // 100 cols -> indices 0..99, two-digit width
         ASSERT_EQ(names.size(), 100u);
         EXPECT_EQ(names.front(), "column00");
@@ -92,18 +110,16 @@ TEST(BinaryColumnStore, HeaderedRoundTrip) {
         "-73.97,40.80,15.25,3\n");
 
     a3i::ConvertOptions opts;
-    opts.input_csv  = csv;
+    opts.input_parquet = to_parquet(csv, /*has_header=*/true);
     opts.output_dir = tmp / "prep";
     opts.dataset_id = "taxi_tiny";
-    opts.has_header = true;
-    opts.delimiter  = ',';
     opts.dimensions = {
         {"pickup_lon", -74.5, -73.5},
         {"pickup_lat",  40.5,  41.5},
     };
     opts.measures = {"fare_amount", "passenger_count"};
 
-    const auto rep = a3i::run_csv_to_columns(opts);
+    const auto rep = a3i::run_parquet_to_columns(opts);
     EXPECT_EQ(rep.rows_written, 3u);
     EXPECT_EQ(rep.rows_read,    3u);
     EXPECT_EQ(rep.rows_filtered_out, 0u);
@@ -130,9 +146,9 @@ TEST(BinaryColumnStore, HeaderedRoundTrip) {
     EXPECT_DOUBLE_EQ(stats.max, 15.25);
 }
 
-// --- Headerless DuckDB-style column names -------------------------------
+// --- Headerless synthesized positional column names ---------------------
 
-TEST(BinaryColumnStore, HeaderlessUsesDuckdbColumnNames) {
+TEST(BinaryColumnStore, HeaderlessUsesPositionalColumnNames) {
     TempDir tmp;
     const auto csv = tmp / "synth.csv";
     write_text(csv,
@@ -140,14 +156,13 @@ TEST(BinaryColumnStore, HeaderlessUsesDuckdbColumnNames) {
         "0.3,0.4,20\n");
 
     a3i::ConvertOptions opts;
-    opts.input_csv  = csv;
+    opts.input_parquet = to_parquet(csv, /*has_header=*/false);
     opts.output_dir = tmp / "prep";
     opts.dataset_id = "synth_tiny";
-    opts.has_header = false;
     opts.dimensions = {{"column0", 0.0, 1.0}, {"column1", 0.0, 1.0}};
     opts.measures   = {"column2"};
 
-    const auto rep = a3i::run_csv_to_columns(opts);
+    const auto rep = a3i::run_parquet_to_columns(opts);
     EXPECT_EQ(rep.rows_written, 2u);
 
     a3i::BinaryColumnStore store(rep.manifest_path);
@@ -178,15 +193,13 @@ TEST(BinaryColumnStore, NullsBecomeNaNAndStatsExcludeThem) {
         "3,3,3.0\n");
 
     a3i::ConvertOptions opts;
-    opts.input_csv   = csv;
+    opts.input_parquet = to_parquet(csv, /*has_header=*/true, ',', /*null_string=*/"NA");
     opts.output_dir  = tmp / "prep";
     opts.dataset_id  = "nulls";
-    opts.has_header  = true;
-    opts.null_string = "NA";
     opts.dimensions  = {{"x", 0, 10}, {"y", 0, 10}};
     opts.measures    = {"m"};
 
-    const auto rep = a3i::run_csv_to_columns(opts);
+    const auto rep = a3i::run_parquet_to_columns(opts);
     ASSERT_EQ(rep.rows_written, 4u);
 
     a3i::BinaryColumnStore store(rep.manifest_path);
@@ -218,13 +231,12 @@ TEST(BinaryColumnStore, GatherReturnsValuesInInputOrder) {
     }
 
     a3i::ConvertOptions opts;
-    opts.input_csv  = csv;
+    opts.input_parquet = to_parquet(csv, /*has_header=*/true);
     opts.output_dir = tmp / "prep";
     opts.dataset_id = "g";
-    opts.has_header = true;
     opts.dimensions = {{"x", 0, 100}};
     opts.measures   = {"m"};
-    auto rep = a3i::run_csv_to_columns(opts);
+    auto rep = a3i::run_parquet_to_columns(opts);
     ASSERT_EQ(rep.rows_written, 10u);
 
     a3i::BinaryColumnStore store(rep.manifest_path);
@@ -254,15 +266,14 @@ TEST(BinaryColumnStore, ValidationFiltersDropRows) {
         "3,4,1\n");   // dropped: bad==1
 
     a3i::ConvertOptions opts;
-    opts.input_csv  = csv;
+    opts.input_parquet = to_parquet(csv, /*has_header=*/true);
     opts.output_dir = tmp / "prep";
     opts.dataset_id = "f";
-    opts.has_header = true;
     opts.dimensions = {{"x", 0, 10}};
     opts.measures   = {"m"};
     opts.validation_filters = {{"bad", a3i::ValidationFilter::Op::Eq, 1.0}};
 
-    auto rep = a3i::run_csv_to_columns(opts);
+    auto rep = a3i::run_parquet_to_columns(opts);
     EXPECT_EQ(rep.rows_written,      2u);
     EXPECT_EQ(rep.rows_filtered_out, 2u);
 
@@ -284,15 +295,14 @@ TEST(BinaryColumnStore, MaxRowsCaps) {
         write_text(csv, s);
     }
     a3i::ConvertOptions opts;
-    opts.input_csv  = csv;
+    opts.input_parquet = to_parquet(csv, /*has_header=*/true);
     opts.output_dir = tmp / "prep";
     opts.dataset_id = "cap";
-    opts.has_header = true;
     opts.dimensions = {{"x", 0, 100}};
     opts.measures   = {"m"};
     opts.max_rows   = 5u;
 
-    auto rep = a3i::run_csv_to_columns(opts);
+    auto rep = a3i::run_parquet_to_columns(opts);
     EXPECT_EQ(rep.rows_written, 5u);
 
     a3i::BinaryColumnStore store(rep.manifest_path);
@@ -309,18 +319,17 @@ TEST(BinaryColumnStore, ManifestExistsBlocksWithoutOverwrite) {
     write_text(csv, "x,m\n0,0\n1,1\n");
 
     a3i::ConvertOptions opts;
-    opts.input_csv  = csv;
+    opts.input_parquet = to_parquet(csv, /*has_header=*/true);
     opts.output_dir = tmp / "prep";
     opts.dataset_id = "i";
-    opts.has_header = true;
     opts.dimensions = {{"x", 0, 10}};
     opts.measures   = {"m"};
 
-    ASSERT_NO_THROW((void)a3i::run_csv_to_columns(opts));
-    EXPECT_THROW((void)a3i::run_csv_to_columns(opts), std::runtime_error);
+    ASSERT_NO_THROW((void)a3i::run_parquet_to_columns(opts));
+    EXPECT_THROW((void)a3i::run_parquet_to_columns(opts), std::runtime_error);
 
     opts.overwrite = true;
-    EXPECT_NO_THROW((void)a3i::run_csv_to_columns(opts));
+    EXPECT_NO_THROW((void)a3i::run_parquet_to_columns(opts));
 }
 
 // --- Unknown name lists available names --------------------------------
@@ -331,15 +340,14 @@ TEST(BinaryColumnStore, UnknownNameThrowsWithAvailableList) {
     write_text(csv, "alpha,beta,gamma\n1,2,3\n");
 
     a3i::ConvertOptions opts;
-    opts.input_csv  = csv;
+    opts.input_parquet = to_parquet(csv, /*has_header=*/true);
     opts.output_dir = tmp / "prep";
     opts.dataset_id = "n";
-    opts.has_header = true;
     opts.dimensions = {{"oops", 0, 10}};
     opts.measures   = {"gamma"};
 
     try {
-        (void)a3i::run_csv_to_columns(opts);
+        (void)a3i::run_parquet_to_columns(opts);
         FAIL() << "expected invalid_argument";
     } catch (const std::invalid_argument& e) {
         const std::string what = e.what();
@@ -357,14 +365,13 @@ TEST(BinaryColumnStore, ManifestLogicalIdEqualsPositionAndFilesAreRelative) {
     write_text(csv, "a,b,c,d\n1,2,3,4\n5,6,7,8\n");
 
     a3i::ConvertOptions opts;
-    opts.input_csv  = csv;
+    opts.input_parquet = to_parquet(csv, /*has_header=*/true);
     opts.output_dir = tmp / "prep";
     opts.dataset_id = "s";
-    opts.has_header = true;
     opts.dimensions = {{"a", 0, 10}, {"b", 0, 10}};
     opts.measures   = {"c", "d"};
 
-    auto rep = a3i::run_csv_to_columns(opts);
+    auto rep = a3i::run_parquet_to_columns(opts);
     auto m = a3i::read_manifest(rep.manifest_path);
 
     for (std::uint16_t i = 0; i < m.dimensions.size(); ++i) {

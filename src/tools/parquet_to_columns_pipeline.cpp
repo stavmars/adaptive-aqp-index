@@ -1,10 +1,10 @@
-#include "a3i/tools/csv_to_columns_pipeline.hpp"
+#include "a3i/tools/parquet_to_columns_pipeline.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <cstdlib>
 #include <ctime>
 #include <fstream>
 #include <limits>
@@ -15,9 +15,11 @@
 #include <string_view>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
-#include <csv2/reader.hpp>
-#include <fast_float/fast_float.h>
+#include <arrow/api.h>
+#include <arrow/io/api.h>
+#include <parquet/arrow/reader.h>
 
 #include "a3i/core/geometry.hpp"
 #include "a3i/storage/manifest.hpp"
@@ -26,19 +28,99 @@ namespace a3i {
 
 namespace {
 
-// --- Numeric parsing ----------------------------------------------------
+constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+
+template <class T>
+T unwrap(arrow::Result<T> result, const std::string& what) {
+    if (!result.ok()) {
+        throw std::runtime_error(what + ": " + result.status().ToString());
+    }
+    return std::move(result).ValueUnsafe();
+}
+
+// One source column flattened to doubles with an explicit null mask. Null
+// entries are stored as NaN; the mask lets us distinguish "absent" (drop a
+// dimension row, NaN a measure) from a real value.
+struct DoubleColumn {
+    std::vector<double> value;
+    std::vector<char>   is_null;
+};
 
 bool parse_double(std::string_view sv, double& out) {
     if (sv.empty()) return false;
-    const auto res = fast_float::from_chars(sv.data(), sv.data() + sv.size(), out);
+    const auto res = std::from_chars(sv.data(), sv.data() + sv.size(), out);
     return res.ec == std::errc{} && res.ptr == sv.data() + sv.size();
 }
 
-// --- Filter semantics ---------------------------------------------------
-// A filter like "DURATION_MINUTES > 1440" *drops* matching rows; NaN
-// observations never cause a row to be dropped on numeric grounds.
+// Flatten an Arrow column (any chunking) to doubles. Integers, floats and
+// booleans convert numerically; strings are parsed (unparseable -> null);
+// nulls are recorded in the mask. Unsupported types are a fatal error.
+DoubleColumn materialize_double(const std::shared_ptr<arrow::ChunkedArray>& column,
+                                const std::string& name) {
+    DoubleColumn col;
+    const auto n = static_cast<std::size_t>(column->length());
+    col.value.reserve(n);
+    col.is_null.reserve(n);
+
+    auto push_null = [&] { col.value.push_back(kNaN); col.is_null.push_back(1); };
+    auto push_val  = [&](double v) { col.value.push_back(v); col.is_null.push_back(0); };
+
+    for (const auto& chunk : column->chunks()) {
+        const auto tid = chunk->type_id();
+        const std::int64_t len = chunk->length();
+        switch (tid) {
+            case arrow::Type::DOUBLE: {
+                auto a = std::static_pointer_cast<arrow::DoubleArray>(chunk);
+                for (std::int64_t i = 0; i < len; ++i)
+                    a->IsNull(i) ? push_null() : push_val(a->Value(i));
+                break;
+            }
+            case arrow::Type::FLOAT: {
+                auto a = std::static_pointer_cast<arrow::FloatArray>(chunk);
+                for (std::int64_t i = 0; i < len; ++i)
+                    a->IsNull(i) ? push_null() : push_val(static_cast<double>(a->Value(i)));
+                break;
+            }
+            case arrow::Type::INT64: {
+                auto a = std::static_pointer_cast<arrow::Int64Array>(chunk);
+                for (std::int64_t i = 0; i < len; ++i)
+                    a->IsNull(i) ? push_null() : push_val(static_cast<double>(a->Value(i)));
+                break;
+            }
+            case arrow::Type::INT32: {
+                auto a = std::static_pointer_cast<arrow::Int32Array>(chunk);
+                for (std::int64_t i = 0; i < len; ++i)
+                    a->IsNull(i) ? push_null() : push_val(static_cast<double>(a->Value(i)));
+                break;
+            }
+            case arrow::Type::BOOL: {
+                auto a = std::static_pointer_cast<arrow::BooleanArray>(chunk);
+                for (std::int64_t i = 0; i < len; ++i)
+                    a->IsNull(i) ? push_null() : push_val(a->Value(i) ? 1.0 : 0.0);
+                break;
+            }
+            case arrow::Type::STRING: case arrow::Type::LARGE_STRING: {
+                auto a = std::static_pointer_cast<arrow::StringArray>(chunk);
+                for (std::int64_t i = 0; i < len; ++i) {
+                    if (a->IsNull(i)) { push_null(); continue; }
+                    const auto sv = a->GetView(i);
+                    double v;
+                    parse_double(std::string_view(sv.data(), sv.size()), v)
+                        ? push_val(v) : push_null();
+                }
+                break;
+            }
+            default:
+                throw std::invalid_argument(
+                    "column '" + name + "' has unsupported type " +
+                    chunk->type()->ToString());
+        }
+    }
+    return col;
+}
+
 bool keep_under(const ValidationFilter::Op op, double cell, double rhs) {
-    if (std::isnan(cell)) return true;
+    if (std::isnan(cell)) return true;  // unknown values never drop on numeric grounds
     switch (op) {
         case ValidationFilter::Op::Lt: return !(cell <  rhs);
         case ValidationFilter::Op::Le: return !(cell <= rhs);
@@ -90,16 +172,14 @@ struct MeasRunning {
     double maxv   = -std::numeric_limits<double>::infinity();
 };
 
-// Templated on the csv2 delimiter policy so we can dispatch on a runtime
-// delimiter at the entry point. csv2's delimiter is a compile-time
-// template parameter; we instantiate one variant per supported delim.
-template <class DelimPolicy>
-ConvertReport run_with_delim(const ConvertOptions& opts) {
-    namespace c2 = csv2;
-    using Reader = c2::Reader<DelimPolicy,
-                              c2::quote_character<'"'>,
-                              c2::first_row_is_header<false>,
-                              c2::trim_policy::no_trimming>;
+}  // namespace
+
+ConvertReport run_parquet_to_columns(const ConvertOptions& opts) {
+    if (opts.input_parquet.empty()) throw std::invalid_argument("input_parquet is required");
+    if (opts.output_dir.empty())    throw std::invalid_argument("output_dir is required");
+    if (opts.dataset_id.empty())    throw std::invalid_argument("dataset_id is required");
+    if (opts.dimensions.empty())    throw std::invalid_argument("at least one dimension is required");
+    if (opts.measures.empty())      throw std::invalid_argument("at least one measure is required");
 
     const auto columns_dir   = opts.output_dir / "columns";
     const auto manifest_path = opts.output_dir / "manifest.json";
@@ -107,57 +187,29 @@ ConvertReport run_with_delim(const ConvertOptions& opts) {
         throw std::runtime_error("manifest already exists (pass overwrite=true to replace): " +
                                  manifest_path.string());
     }
-    std::filesystem::create_directories(columns_dir);
 
-    Reader reader;
-    if (!reader.mmap(opts.input_csv.string())) {
-        throw std::runtime_error("cannot open input csv: " + opts.input_csv.string());
-    }
+    // --- Read the Parquet ------------------------------------------------
+    auto input = unwrap(arrow::io::ReadableFile::Open(opts.input_parquet.string()),
+                        "cannot open input parquet: " + opts.input_parquet.string());
+    auto reader = unwrap(parquet::arrow::OpenFile(input, arrow::default_memory_pool()),
+                         "cannot open parquet reader: " + opts.input_parquet.string());
+    auto table = unwrap(reader->ReadTable(),
+                        "cannot read parquet: " + opts.input_parquet.string());
 
-    auto it  = reader.begin();
-    auto end = reader.end();
-    // csv2's RowIterator exposes only operator!= and operator++; check
-    // emptiness through the negated inequality.
-    if (!(it != end)) throw std::runtime_error("input csv is empty");
-
-    // Slurp one row's cells into a vector<string>. csv2's read_value
-    // handles RFC-4180 quote escaping for us.
-    auto slurp_row = [](auto&& row, std::vector<std::string>& out) {
-        out.clear();
-        std::string v;
-        for (const auto cell : row) {
-            v.clear();
-            cell.read_value(v);
-            out.push_back(std::move(v));
-        }
-    };
-
-    std::vector<std::string> first_row;
-    slurp_row(*it, first_row);
-
-    std::vector<std::string> column_names;
-    bool process_first_as_data = false;
-    if (opts.has_header) {
-        column_names = first_row;
-        ++it;
-    } else {
-        column_names = duckdb_default_column_names(first_row.size());
-        process_first_as_data = true;
-    }
-
+    const auto& schema = table->schema();
     std::unordered_map<std::string, std::uint32_t> name_to_index;
-    name_to_index.reserve(column_names.size());
-    for (std::uint32_t i = 0; i < column_names.size(); ++i) {
-        name_to_index.emplace(column_names[i], i);
+    name_to_index.reserve(static_cast<std::size_t>(schema->num_fields()));
+    for (int i = 0; i < schema->num_fields(); ++i) {
+        name_to_index.emplace(schema->field(i)->name(), static_cast<std::uint32_t>(i));
     }
     auto resolve = [&](const std::string& name) {
         const auto it_n = name_to_index.find(name);
         if (it_n == name_to_index.end()) {
             std::ostringstream msg;
             msg << "column name not found: '" << name << "'. available: ";
-            for (std::size_t i = 0; i < column_names.size(); ++i) {
+            for (int i = 0; i < schema->num_fields(); ++i) {
                 if (i) msg << ", ";
-                msg << column_names[i];
+                msg << schema->field(i)->name();
             }
             throw std::invalid_argument(msg.str());
         }
@@ -179,6 +231,20 @@ ConvertReport run_with_delim(const ConvertOptions& opts) {
         filters.push_back({resolve(f.name), f.op, f.value});
     }
 
+    // Materialize only the columns we actually need, once.
+    std::unordered_map<std::uint32_t, DoubleColumn> cols;
+    auto need = [&](std::uint32_t idx) {
+        if (cols.find(idx) == cols.end()) {
+            cols.emplace(idx, materialize_double(table->column(static_cast<int>(idx)),
+                                                 schema->field(static_cast<int>(idx))->name()));
+        }
+    };
+    for (auto s : dim_src)  need(s);
+    for (auto s : meas_src) need(s);
+    for (const auto& f : filters) need(f.src);
+
+    // --- Output sinks -----------------------------------------------------
+    std::filesystem::create_directories(columns_dir);
     std::vector<std::unique_ptr<ColumnSink>> dim_sinks;
     std::vector<std::unique_ptr<ColumnSink>> meas_sinks;
     std::vector<std::string> dim_file_rel(opts.dimensions.size());
@@ -198,50 +264,36 @@ ConvertReport run_with_delim(const ConvertOptions& opts) {
     ConvertReport rep;
     rep.manifest_path = manifest_path;
 
-    std::vector<double> dim_vals(opts.dimensions.size());
-    std::vector<double> meas_vals(opts.measures.size());
-
-    const std::size_t expected_cols = column_names.size();
+    const std::uint64_t total_rows = static_cast<std::uint64_t>(table->num_rows());
     const bool have_cap = opts.max_rows.has_value();
     const std::uint64_t cap = have_cap ? *opts.max_rows : 0;
 
-    auto cell_double = [&](const std::vector<std::string>& cells, std::uint32_t src) -> double {
-        const std::string& s = cells[src];
-        if (s.empty()) return std::numeric_limits<double>::quiet_NaN();
-        if (!opts.null_string.empty() && s == opts.null_string) {
-            return std::numeric_limits<double>::quiet_NaN();
-        }
-        double v;
-        if (!parse_double(s, v)) return std::numeric_limits<double>::quiet_NaN();
-        return v;
-    };
+    std::vector<double> dim_vals(opts.dimensions.size());
 
-    // Returns false when the row cap is hit and we should stop iterating.
-    auto process_row = [&](std::vector<std::string>& cells) -> bool {
+    for (std::uint64_t r = 0; r < total_rows; ++r) {
         rep.rows_read++;
-        // csv2 omits a trailing empty field after a terminal delimiter
-        // ("a,b,\n" → 2 cells). Pad missing trailing fields back in so
-        // we don't drop rows that simply have empty rightmost cells.
-        if (cells.size() < expected_cols) {
-            cells.resize(expected_cols);
-        }
 
+        // Drop filters: remove the row if any predicate matches.
+        bool dropped = false;
         for (const auto& f : filters) {
-            if (!keep_under(f.op, cell_double(cells, f.src), f.value)) {
-                rep.rows_filtered_out++;
-                return true;
-            }
+            const auto& c = cols.at(f.src);
+            const double cell = c.is_null[r] ? kNaN : c.value[r];
+            if (!keep_under(f.op, cell, f.value)) { dropped = true; break; }
         }
+        if (dropped) { rep.rows_filtered_out++; continue; }
 
-        // A point with an unknown coordinate has no place in the index.
+        // Dimensions: a missing or out-of-bounds coordinate drops the row.
+        bool bad_dim = false;
         for (std::size_t i = 0; i < opts.dimensions.size(); ++i) {
-            const double v = cell_double(cells, dim_src[i]);
-            if (std::isnan(v)) { rep.rows_filtered_out++; return true; }
+            const auto& c = cols.at(dim_src[i]);
+            if (c.is_null[r]) { bad_dim = true; break; }
+            const double v = c.value[r];
+            if (v < opts.dimensions[i].low || v > opts.dimensions[i].high) {
+                bad_dim = true; break;
+            }
             dim_vals[i] = v;
         }
-        for (std::size_t i = 0; i < opts.measures.size(); ++i) {
-            meas_vals[i] = cell_double(cells, meas_src[i]);
-        }
+        if (bad_dim) { rep.rows_filtered_out++; continue; }
 
         for (std::size_t i = 0; i < opts.dimensions.size(); ++i) {
             dim_sinks[i]->write(dim_vals[i]);
@@ -250,7 +302,8 @@ ConvertReport run_with_delim(const ConvertOptions& opts) {
             if (dim_vals[i] > s.maxv) s.maxv = dim_vals[i];
         }
         for (std::size_t i = 0; i < opts.measures.size(); ++i) {
-            const double v = meas_vals[i];
+            const auto& c = cols.at(meas_src[i]);
+            const double v = c.is_null[r] ? kNaN : c.value[r];
             meas_sinks[i]->write(v);
             auto& s = meas_stats[i];
             if (std::isnan(v)) {
@@ -265,23 +318,7 @@ ConvertReport run_with_delim(const ConvertOptions& opts) {
         }
 
         rep.rows_written++;
-        return !(have_cap && rep.rows_written >= cap);
-    };
-
-    bool keep_going = true;
-    if (process_first_as_data) {
-        keep_going = process_row(first_row);
-    }
-    if (keep_going) {
-        std::vector<std::string> row_cells;
-        for (; it != end; ++it) {
-            slurp_row(*it, row_cells);
-            // csv2 can yield an empty trailing row for files ending in \n.
-            if (row_cells.empty() || (row_cells.size() == 1 && row_cells[0].empty())) {
-                continue;
-            }
-            if (!process_row(row_cells)) break;
-        }
+        if (have_cap && rep.rows_written >= cap) break;
     }
 
     dim_sinks.clear();
@@ -324,7 +361,7 @@ ConvertReport run_with_delim(const ConvertOptions& opts) {
         m.domain_bounds.dims.push_back(Range{dr.low, dr.high});
     }
     m.null_encoding     = "NaN";
-    m.source_file       = std::filesystem::absolute(opts.input_csv).string();
+    m.source_file       = std::filesystem::absolute(opts.input_parquet).string();
     m.source_sha256     = "";
     if (opts.max_rows) m.source_prefix_rows = *opts.max_rows;
     m.converter_version = opts.converter_version;
@@ -332,41 +369,6 @@ ConvertReport run_with_delim(const ConvertOptions& opts) {
 
     write_manifest(manifest_path, m);
     return rep;
-}
-
-}  // namespace
-
-std::vector<std::string> duckdb_default_column_names(std::size_t num_columns) {
-    if (num_columns == 0) return {};
-    const std::size_t max_idx = num_columns - 1;
-    const std::size_t width = std::to_string(max_idx).size();
-    std::vector<std::string> names;
-    names.reserve(num_columns);
-    for (std::size_t i = 0; i < num_columns; ++i) {
-        auto s = std::to_string(i);
-        if (s.size() < width) s.insert(0, width - s.size(), '0');
-        names.push_back("column" + s);
-    }
-    return names;
-}
-
-ConvertReport run_csv_to_columns(const ConvertOptions& opts) {
-    if (opts.input_csv.empty())  throw std::invalid_argument("input_csv is required");
-    if (opts.output_dir.empty()) throw std::invalid_argument("output_dir is required");
-    if (opts.dataset_id.empty()) throw std::invalid_argument("dataset_id is required");
-    if (opts.dimensions.empty()) throw std::invalid_argument("at least one dimension is required");
-    if (opts.measures.empty())   throw std::invalid_argument("at least one measure is required");
-
-    // csv2 takes the delimiter as a template parameter; dispatch here on
-    // the supported runtime values. Add more cases as new datasets need.
-    switch (opts.delimiter) {
-        case ',':  return run_with_delim<csv2::delimiter<','>>(opts);
-        case '\t': return run_with_delim<csv2::delimiter<'\t'>>(opts);
-        default:
-            throw std::invalid_argument(
-                std::string("unsupported delimiter: '") + opts.delimiter +
-                "' (only ',' and '\\t' are supported)");
-    }
 }
 
 }  // namespace a3i

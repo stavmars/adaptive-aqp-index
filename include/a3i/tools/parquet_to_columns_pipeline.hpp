@@ -1,13 +1,14 @@
-// Offline CSV -> binary column converter pipeline.
+// Offline Parquet -> binary column converter pipeline.
 //
-// Reads a (header or headerless) delimited text file, projects only the
-// requested dimensions and measures, encodes missing/invalid measure
-// values as NaN, applies optional row-level validation filters, and
-// writes one .bin per kept column plus a manifest.json describing them.
+// Reads the dataset's Parquet (typed, columnar, unfiltered),
+// projects only the requested dimensions and measures by name, encodes
+// missing/null measure values as NaN, applies the row survival rule
+// (domain bounds plus drop filters), and writes one .bin per kept column
+// plus a manifest.json describing them.
 //
 // All decisions about *what* to convert live here. The CLI wrapper in
-// tools/convert_csv_to_columns.cpp only parses arguments and calls
-// `run_csv_to_columns()`. This split lets unit tests drive the pipeline
+// tools/convert_parquet_to_columns.cpp only parses arguments and calls
+// `run_parquet_to_columns()`. This split lets unit tests drive the pipeline
 // in-process against tiny fixtures without exec().
 //
 // Never called from the runner. Idempotent across runs with the same
@@ -26,14 +27,14 @@ namespace a3i {
 
 /// One requested dimension column.
 struct DimensionRequest {
-    std::string name;   ///< From the header, or DuckDB-style "columnNN" fallback.
+    std::string name;   ///< Resolved against the Parquet schema's column names.
     double low  = 0.0;  ///< Domain bound (low, inclusive).
     double high = 0.0;  ///< Domain bound (high, exclusive — half-open interval).
 };
 
-/// One row-level validation filter, e.g. {"DURATION_MINUTES", Gt, 1440.0}.
+/// One row-level drop filter, e.g. {"DURATION_MINUTES", Gt, 1440.0}.
 /// Operates on raw numeric values of any dimension or measure column the
-/// converter parses (after `null_string` masking but before dropping NaNs).
+/// converter reads. A row is dropped if any filter matches.
 struct ValidationFilter {
     enum class Op { Lt, Le, Gt, Ge, Eq, Ne };
     std::string name;
@@ -42,12 +43,9 @@ struct ValidationFilter {
 };
 
 struct ConvertOptions {
-    std::filesystem::path input_csv;       ///< Required.
+    std::filesystem::path input_parquet;   ///< Required: the Parquet source.
     std::filesystem::path output_dir;      ///< Required: where columns/ + manifest.json land.
     std::string           dataset_id;      ///< Required: copied into the manifest.
-    bool                  has_header = false;
-    char                  delimiter  = ',';
-    std::string           null_string;     ///< Empty => no null sentinel (only empty fields are NaN).
     std::vector<DimensionRequest>   dimensions;
     std::vector<std::string>        measures;
     std::vector<ValidationFilter>   validation_filters;
@@ -60,19 +58,13 @@ struct ConvertOptions {
 /// in the .bin files).
 struct ConvertReport {
     std::uint64_t rows_written = 0;
-    std::uint64_t rows_read    = 0;          ///< Total CSV rows scanned (incl. dropped).
-    std::uint64_t rows_filtered_out = 0;     ///< Dropped by validation_filters or parse failures.
+    std::uint64_t rows_read    = 0;          ///< Total source rows scanned (incl. dropped).
+    std::uint64_t rows_filtered_out = 0;     ///< Dropped by filters or out-of-bounds.
     std::filesystem::path manifest_path;
 };
 
-/// Synthesize DuckDB-style column names for a headerless CSV with
-/// `num_columns` columns: "column" + zero-padded zero-based index,
-/// padded to `len(str(num_columns - 1))` digits. So 1..9 columns yield
-/// `column0..column8`; 10..99 columns yield `column00..column99`.
-std::vector<std::string> duckdb_default_column_names(std::size_t num_columns);
-
 /// Run one conversion. Throws std::runtime_error on I/O errors,
 /// std::invalid_argument on unresolved names or malformed options.
-ConvertReport run_csv_to_columns(const ConvertOptions& opts);
+ConvertReport run_parquet_to_columns(const ConvertOptions& opts);
 
 }  // namespace a3i

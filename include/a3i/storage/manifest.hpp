@@ -31,7 +31,7 @@ struct GlobalMeasureStats {
 /// One entry per dimension column.
 struct DimensionDescriptor {
     std::uint16_t logical_id = 0;   ///< Dense index; also the DimensionId.
-    std::string name;               ///< From the CSV header or DuckDB-style fallback.
+    std::string name;               ///< Source column name (header or synthesized positional fallback).
     std::uint32_t source_index = 0; ///< Original CSV column position (provenance only).
     std::string file;               ///< Path to the .bin, relative to the manifest dir.
     double min = 0.0;               ///< Observed min over non-NaN values.

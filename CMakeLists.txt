@@ -22,13 +22,6 @@ endif()
 # ---- Third-party dependencies (FetchContent) ----------------------------
 include(FetchContent)
 
-FetchContent_Declare(
-    fast_float
-    GIT_REPOSITORY https://github.com/fastfloat/fast_float.git
-    GIT_TAG        v6.1.6
-)
-FetchContent_MakeAvailable(fast_float)
-
 set(JSON_BuildTests OFF CACHE INTERNAL "")
 FetchContent_Declare(
     nlohmann_json
@@ -37,14 +30,9 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(nlohmann_json)
 
-# csv2 — header-only CSV reader with mmap'd input and configurable
-# delimiter/quote. Avoids zsv's autoconf build toolchain.
-FetchContent_Declare(
-    csv2
-    GIT_REPOSITORY https://github.com/p-ranav/csv2.git
-    GIT_TAG        master
-)
-FetchContent_MakeAvailable(csv2)
+
+find_package(Arrow REQUIRED)
+find_package(Parquet REQUIRED)
 
 # ---- Core library --------------------------------------------------------
 # Static library carrying compiled units shared by apps and tests.
@@ -52,7 +40,9 @@ add_library(a3i_core STATIC
     src/storage/index_table.cpp
     src/storage/manifest.cpp
     src/storage/binary_column_store.cpp
-    src/tools/csv_to_columns_pipeline.cpp
+    src/tools/parquet_to_columns_pipeline.cpp
+    src/tools/csv_to_parquet.cpp
+    src/tools/synthetic_generator.cpp
     src/experiments/truth_store.cpp
     src/access_path/substrate_factory.cpp
     src/substrates/kd_tree.cpp
@@ -75,9 +65,9 @@ target_include_directories(a3i_core PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
 )
 target_link_libraries(a3i_core PUBLIC
-    fast_float
     nlohmann_json::nlohmann_json
-    csv2::csv2
+    Arrow::arrow_shared
+    Parquet::parquet_shared
 )
 target_compile_features(a3i_core PUBLIC cxx_std_20)
 
@@ -85,9 +75,19 @@ target_compile_features(a3i_core PUBLIC cxx_std_20)
 add_executable(a3i_sanity apps/a3i_sanity.cpp)
 target_link_libraries(a3i_sanity PRIVATE a3i_core)
 
-add_executable(convert_csv_to_columns tools/convert_csv_to_columns.cpp)
-target_link_libraries(convert_csv_to_columns PRIVATE a3i_core)
-set_target_properties(convert_csv_to_columns PROPERTIES
+add_executable(convert_parquet_to_columns tools/convert_parquet_to_columns.cpp)
+target_link_libraries(convert_parquet_to_columns PRIVATE a3i_core)
+set_target_properties(convert_parquet_to_columns PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tools)
+
+add_executable(csv_to_parquet tools/csv_to_parquet.cpp)
+target_link_libraries(csv_to_parquet PRIVATE a3i_core)
+set_target_properties(csv_to_parquet PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tools)
+
+add_executable(generate_dataset tools/generate_dataset.cpp)
+target_link_libraries(generate_dataset PRIVATE a3i_core)
+set_target_properties(generate_dataset PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tools)
 
 # ---- Tests ---------------------------------------------------------------
