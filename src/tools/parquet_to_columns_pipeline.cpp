@@ -249,12 +249,16 @@ ConvertReport run_parquet_to_columns(const ConvertOptions& opts) {
     std::vector<std::unique_ptr<ColumnSink>> meas_sinks;
     std::vector<std::string> dim_file_rel(opts.dimensions.size());
     std::vector<std::string> meas_file_rel(opts.measures.size());
+    // Each column file is named after the column it holds, so a prepared
+    // directory is self-describing on disk; the manifest still maps logical ids
+    // to these paths. Forward slashes in the relative path are intentional and
+    // portable; the store opens the file through the manifest's path field.
     for (std::size_t i = 0; i < opts.dimensions.size(); ++i) {
-        dim_file_rel[i] = "columns/dim_" + std::to_string(i) + ".bin";
+        dim_file_rel[i] = "columns/" + opts.dimensions[i].name + ".bin";
         dim_sinks.push_back(std::make_unique<ColumnSink>(opts.output_dir / dim_file_rel[i]));
     }
     for (std::size_t i = 0; i < opts.measures.size(); ++i) {
-        meas_file_rel[i] = "columns/measure_" + std::to_string(i) + ".bin";
+        meas_file_rel[i] = "columns/" + opts.measures[i] + ".bin";
         meas_sinks.push_back(std::make_unique<ColumnSink>(opts.output_dir / meas_file_rel[i]));
     }
 

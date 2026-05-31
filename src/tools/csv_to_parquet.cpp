@@ -1,5 +1,7 @@
 #include "a3i/tools/csv_to_parquet.hpp"
 
+#include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -76,39 +78,69 @@ CsvToParquetReport csv_to_parquet(const CsvToParquetOptions& opts) {
         convert_opts.null_values.push_back(opts.null_string);
     }
 
-    auto reader = unwrap(
-        arrow::csv::TableReader::Make(arrow::io::default_io_context(), input,
-                                      read_opts, parse_opts, convert_opts),
-        "cannot build csv reader");
-    auto table = unwrap(reader->Read(), "cannot read csv: " + opts.input_path.string());
+    // Read the CSV in bounded record batches instead of materializing the whole
+    // file in memory. A multi-gigabyte source would otherwise be loaded in one
+    // piece and exhaust RAM (the process is then terminated by the OS). A large
+    // block keeps column type inference stable (it is decided from the first
+    // block) while capping peak memory far below the full file size.
+    read_opts.block_size = 64 << 20;  // 64 MiB of input per batch
 
+    auto reader = unwrap(
+        arrow::csv::StreamingReader::Make(arrow::io::default_io_context(), input,
+                                          read_opts, parse_opts, convert_opts),
+        "cannot build csv reader");
+
+    // For a headerless source the reader emits positional names; rebuild the
+    // schema with stable `colNN` names that every batch is written under.
+    std::shared_ptr<arrow::Schema> out_schema = reader->schema();
     if (!opts.has_header) {
         auto names = default_column_names(
-            static_cast<std::size_t>(table->num_columns()));
-        table = unwrap(table->RenameColumns(names), "cannot rename columns");
+            static_cast<std::size_t>(out_schema->num_fields()));
+        arrow::FieldVector fields;
+        fields.reserve(static_cast<std::size_t>(out_schema->num_fields()));
+        for (int i = 0; i < out_schema->num_fields(); ++i) {
+            fields.push_back(
+                out_schema->field(i)->WithName(names[static_cast<std::size_t>(i)]));
+        }
+        out_schema = arrow::schema(fields);
     }
 
     auto out = unwrap(arrow::io::FileOutputStream::Open(opts.output_path.string()),
                       "cannot open output parquet: " + opts.output_path.string());
 
-    // Pin writer properties so the same input yields a byte-identical file:
-    // single row group, no compression, stable encodings.
+    // Pin writer properties so the same input yields a byte-stable file:
+    // no compression, no dictionary, fixed version.
     parquet::WriterProperties::Builder builder;
     builder.compression(parquet::Compression::UNCOMPRESSED);
     builder.disable_dictionary();
     builder.version(parquet::ParquetVersion::PARQUET_2_6);
     auto props = builder.build();
 
-    const std::int64_t chunk = table->num_rows() > 0 ? table->num_rows() : 1;
-    check(parquet::arrow::WriteTable(*table, arrow::default_memory_pool(),
-                                     out, chunk, props),
-          "cannot write parquet: " + opts.output_path.string());
+    auto writer = unwrap(
+        parquet::arrow::FileWriter::Open(*out_schema, arrow::default_memory_pool(),
+                                         out, props),
+        "cannot open parquet writer: " + opts.output_path.string());
+
+    std::uint64_t rows = 0;
+    std::shared_ptr<arrow::RecordBatch> batch;
+    while (true) {
+        check(reader->ReadNext(&batch), "cannot read csv: " + opts.input_path.string());
+        if (!batch) break;
+        if (!opts.has_header) {
+            batch = arrow::RecordBatch::Make(out_schema, batch->num_rows(),
+                                             batch->columns());
+        }
+        check(writer->WriteRecordBatch(*batch),
+              "cannot write parquet: " + opts.output_path.string());
+        rows += static_cast<std::uint64_t>(batch->num_rows());
+    }
+    check(writer->Close(), "cannot close parquet writer");
     check(out->Close(), "cannot close parquet output");
 
     CsvToParquetReport rep;
-    rep.rows = static_cast<std::uint64_t>(table->num_rows());
-    rep.column_names.reserve(static_cast<std::size_t>(table->num_columns()));
-    for (const auto& field : table->schema()->fields()) {
+    rep.rows = rows;
+    rep.column_names.reserve(static_cast<std::size_t>(out_schema->num_fields()));
+    for (const auto& field : out_schema->fields()) {
         rep.column_names.push_back(field->name());
     }
     return rep;
