@@ -9,6 +9,8 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <numeric>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -38,6 +40,12 @@ T unwrap(arrow::Result<T> result, const std::string& what) {
     return std::move(result).ValueUnsafe();
 }
 
+void check(const arrow::Status& status, const std::string& what) {
+    if (!status.ok()) {
+        throw std::runtime_error(what + ": " + status.ToString());
+    }
+}
+
 // One source column flattened to doubles with an explicit null mask. Null
 // entries are stored as NaN; the mask lets us distinguish "absent" (drop a
 // dimension row, NaN a measure) from a real value.
@@ -52,71 +60,64 @@ bool parse_double(std::string_view sv, double& out) {
     return res.ec == std::errc{} && res.ptr == sv.data() + sv.size();
 }
 
-// Flatten an Arrow column (any chunking) to doubles. Integers, floats and
-// booleans convert numerically; strings are parsed (unparseable -> null);
-// nulls are recorded in the mask. Unsupported types are a fatal error.
-DoubleColumn materialize_double(const std::shared_ptr<arrow::ChunkedArray>& column,
-                                const std::string& name) {
-    DoubleColumn col;
-    const auto n = static_cast<std::size_t>(column->length());
-    col.value.reserve(n);
-    col.is_null.reserve(n);
-
+// Append one Arrow array to a double column with an explicit null mask.
+// Integers, floats and booleans convert numerically; strings are parsed
+// (unparseable -> null); nulls are recorded in the mask. Unsupported types are
+// a fatal error. Called once per needed column per streamed batch, so peak
+// memory stays bounded by the batch size rather than the whole file.
+void append_array_as_double(const arrow::Array& chunk, const std::string& name,
+                            DoubleColumn& col) {
     auto push_null = [&] { col.value.push_back(kNaN); col.is_null.push_back(1); };
     auto push_val  = [&](double v) { col.value.push_back(v); col.is_null.push_back(0); };
 
-    for (const auto& chunk : column->chunks()) {
-        const auto tid = chunk->type_id();
-        const std::int64_t len = chunk->length();
-        switch (tid) {
-            case arrow::Type::DOUBLE: {
-                auto a = std::static_pointer_cast<arrow::DoubleArray>(chunk);
-                for (std::int64_t i = 0; i < len; ++i)
-                    a->IsNull(i) ? push_null() : push_val(a->Value(i));
-                break;
-            }
-            case arrow::Type::FLOAT: {
-                auto a = std::static_pointer_cast<arrow::FloatArray>(chunk);
-                for (std::int64_t i = 0; i < len; ++i)
-                    a->IsNull(i) ? push_null() : push_val(static_cast<double>(a->Value(i)));
-                break;
-            }
-            case arrow::Type::INT64: {
-                auto a = std::static_pointer_cast<arrow::Int64Array>(chunk);
-                for (std::int64_t i = 0; i < len; ++i)
-                    a->IsNull(i) ? push_null() : push_val(static_cast<double>(a->Value(i)));
-                break;
-            }
-            case arrow::Type::INT32: {
-                auto a = std::static_pointer_cast<arrow::Int32Array>(chunk);
-                for (std::int64_t i = 0; i < len; ++i)
-                    a->IsNull(i) ? push_null() : push_val(static_cast<double>(a->Value(i)));
-                break;
-            }
-            case arrow::Type::BOOL: {
-                auto a = std::static_pointer_cast<arrow::BooleanArray>(chunk);
-                for (std::int64_t i = 0; i < len; ++i)
-                    a->IsNull(i) ? push_null() : push_val(a->Value(i) ? 1.0 : 0.0);
-                break;
-            }
-            case arrow::Type::STRING: case arrow::Type::LARGE_STRING: {
-                auto a = std::static_pointer_cast<arrow::StringArray>(chunk);
-                for (std::int64_t i = 0; i < len; ++i) {
-                    if (a->IsNull(i)) { push_null(); continue; }
-                    const auto sv = a->GetView(i);
-                    double v;
-                    parse_double(std::string_view(sv.data(), sv.size()), v)
-                        ? push_val(v) : push_null();
-                }
-                break;
-            }
-            default:
-                throw std::invalid_argument(
-                    "column '" + name + "' has unsupported type " +
-                    chunk->type()->ToString());
+    const std::int64_t len = chunk.length();
+    switch (chunk.type_id()) {
+        case arrow::Type::DOUBLE: {
+            const auto& a = static_cast<const arrow::DoubleArray&>(chunk);
+            for (std::int64_t i = 0; i < len; ++i)
+                a.IsNull(i) ? push_null() : push_val(a.Value(i));
+            break;
         }
+        case arrow::Type::FLOAT: {
+            const auto& a = static_cast<const arrow::FloatArray&>(chunk);
+            for (std::int64_t i = 0; i < len; ++i)
+                a.IsNull(i) ? push_null() : push_val(static_cast<double>(a.Value(i)));
+            break;
+        }
+        case arrow::Type::INT64: {
+            const auto& a = static_cast<const arrow::Int64Array&>(chunk);
+            for (std::int64_t i = 0; i < len; ++i)
+                a.IsNull(i) ? push_null() : push_val(static_cast<double>(a.Value(i)));
+            break;
+        }
+        case arrow::Type::INT32: {
+            const auto& a = static_cast<const arrow::Int32Array&>(chunk);
+            for (std::int64_t i = 0; i < len; ++i)
+                a.IsNull(i) ? push_null() : push_val(static_cast<double>(a.Value(i)));
+            break;
+        }
+        case arrow::Type::BOOL: {
+            const auto& a = static_cast<const arrow::BooleanArray&>(chunk);
+            for (std::int64_t i = 0; i < len; ++i)
+                a.IsNull(i) ? push_null() : push_val(a.Value(i) ? 1.0 : 0.0);
+            break;
+        }
+        case arrow::Type::STRING: case arrow::Type::LARGE_STRING: {
+            const auto& a = static_cast<const arrow::StringArray&>(chunk);
+            for (std::int64_t i = 0; i < len; ++i) {
+                if (a.IsNull(i)) { push_null(); continue; }
+                const auto sv = a.GetView(i);
+                double v;
+                parse_double(std::string_view(sv.data(), sv.size()), v)
+                    ? push_val(v) : push_null();
+            }
+            break;
+        }
+        default:
+            throw std::invalid_argument(
+                "column '" + name + "' has unsupported type " +
+                chunk.type()->ToString());
     }
-    return col;
 }
 
 bool keep_under(const ValidationFilter::Op op, double cell, double rhs) {
@@ -188,15 +189,15 @@ ConvertReport run_parquet_to_columns(const ConvertOptions& opts) {
                                  manifest_path.string());
     }
 
-    // --- Read the Parquet ------------------------------------------------
+    // --- Open the Parquet (streamed by row-group batch, never fully read) ---
     auto input = unwrap(arrow::io::ReadableFile::Open(opts.input_parquet.string()),
                         "cannot open input parquet: " + opts.input_parquet.string());
     auto reader = unwrap(parquet::arrow::OpenFile(input, arrow::default_memory_pool()),
                          "cannot open parquet reader: " + opts.input_parquet.string());
-    auto table = unwrap(reader->ReadTable(),
-                        "cannot read parquet: " + opts.input_parquet.string());
+    std::shared_ptr<arrow::Schema> schema;
+    check(reader->GetSchema(&schema),
+          "cannot read parquet schema: " + opts.input_parquet.string());
 
-    const auto& schema = table->schema();
     std::unordered_map<std::string, std::uint32_t> name_to_index;
     name_to_index.reserve(static_cast<std::size_t>(schema->num_fields()));
     for (int i = 0; i < schema->num_fields(); ++i) {
@@ -231,17 +232,30 @@ ConvertReport run_parquet_to_columns(const ConvertOptions& opts) {
         filters.push_back({resolve(f.name), f.op, f.value});
     }
 
-    // Materialize only the columns we actually need, once.
-    std::unordered_map<std::uint32_t, DoubleColumn> cols;
-    auto need = [&](std::uint32_t idx) {
-        if (cols.find(idx) == cols.end()) {
-            cols.emplace(idx, materialize_double(table->column(static_cast<int>(idx)),
-                                                 schema->field(static_cast<int>(idx))->name()));
-        }
+    // Read only the columns we actually use, as the union of dimension,
+    // measure and filter sources, sorted and de-duplicated. The record-batch
+    // reader yields these columns in this order, so a source index maps to a
+    // batch position by lower_bound.
+    std::vector<int> needed;
+    {
+        std::set<std::uint32_t> uniq;
+        for (auto s : dim_src)  uniq.insert(s);
+        for (auto s : meas_src) uniq.insert(s);
+        for (const auto& f : filters) uniq.insert(f.src);
+        needed.reserve(uniq.size());
+        for (auto s : uniq) needed.push_back(static_cast<int>(s));
+    }
+    auto batch_pos = [&](std::uint32_t src) -> std::size_t {
+        const auto it = std::lower_bound(needed.begin(), needed.end(),
+                                         static_cast<int>(src));
+        return static_cast<std::size_t>(it - needed.begin());
     };
-    for (auto s : dim_src)  need(s);
-    for (auto s : meas_src) need(s);
-    for (const auto& f : filters) need(f.src);
+    std::vector<std::size_t> dim_pos(dim_src.size());
+    for (std::size_t i = 0; i < dim_src.size(); ++i) dim_pos[i] = batch_pos(dim_src[i]);
+    std::vector<std::size_t> meas_pos(meas_src.size());
+    for (std::size_t i = 0; i < meas_src.size(); ++i) meas_pos[i] = batch_pos(meas_src[i]);
+    std::vector<std::size_t> filter_pos(filters.size());
+    for (std::size_t i = 0; i < filters.size(); ++i) filter_pos[i] = batch_pos(filters[i].src);
 
     // --- Output sinks -----------------------------------------------------
     std::filesystem::create_directories(columns_dir);
@@ -268,61 +282,87 @@ ConvertReport run_parquet_to_columns(const ConvertOptions& opts) {
     ConvertReport rep;
     rep.manifest_path = manifest_path;
 
-    const std::uint64_t total_rows = static_cast<std::uint64_t>(table->num_rows());
     const bool have_cap = opts.max_rows.has_value();
     const std::uint64_t cap = have_cap ? *opts.max_rows : 0;
 
+    // --- Stream the Parquet one row-group batch at a time -----------------
+    std::vector<int> row_groups(static_cast<std::size_t>(reader->num_row_groups()));
+    std::iota(row_groups.begin(), row_groups.end(), 0);
+    auto batch_reader = unwrap(reader->GetRecordBatchReader(row_groups, needed),
+                               "cannot stream parquet: " + opts.input_parquet.string());
+
+    std::vector<DoubleColumn> bcols(needed.size());
     std::vector<double> dim_vals(opts.dimensions.size());
+    bool cap_reached = false;
 
-    for (std::uint64_t r = 0; r < total_rows; ++r) {
-        rep.rows_read++;
+    while (!cap_reached) {
+        std::shared_ptr<arrow::RecordBatch> batch;
+        check(batch_reader->ReadNext(&batch),
+              "cannot read parquet batch: " + opts.input_parquet.string());
+        if (!batch) break;  // end of stream
+        const std::int64_t bn = batch->num_rows();
 
-        // Drop filters: remove the row if any predicate matches.
-        bool dropped = false;
-        for (const auto& f : filters) {
-            const auto& c = cols.at(f.src);
-            const double cell = c.is_null[r] ? kNaN : c.value[r];
-            if (!keep_under(f.op, cell, f.value)) { dropped = true; break; }
+        // Decode this batch's needed columns to doubles; buffers are reused
+        // across batches so peak memory is one batch, not the whole file.
+        for (std::size_t c = 0; c < needed.size(); ++c) {
+            bcols[c].value.clear();
+            bcols[c].is_null.clear();
+            bcols[c].value.reserve(static_cast<std::size_t>(bn));
+            bcols[c].is_null.reserve(static_cast<std::size_t>(bn));
+            append_array_as_double(*batch->column(static_cast<int>(c)),
+                                   schema->field(needed[c])->name(), bcols[c]);
         }
-        if (dropped) { rep.rows_filtered_out++; continue; }
 
-        // Dimensions: a missing or out-of-bounds coordinate drops the row.
-        bool bad_dim = false;
-        for (std::size_t i = 0; i < opts.dimensions.size(); ++i) {
-            const auto& c = cols.at(dim_src[i]);
-            if (c.is_null[r]) { bad_dim = true; break; }
-            const double v = c.value[r];
-            if (v < opts.dimensions[i].low || v > opts.dimensions[i].high) {
-                bad_dim = true; break;
+        for (std::int64_t r = 0; r < bn; ++r) {
+            rep.rows_read++;
+
+            // Drop filters: remove the row if any predicate matches.
+            bool dropped = false;
+            for (std::size_t k = 0; k < filters.size(); ++k) {
+                const auto& c = bcols[filter_pos[k]];
+                const double cell = c.is_null[r] ? kNaN : c.value[r];
+                if (!keep_under(filters[k].op, cell, filters[k].value)) { dropped = true; break; }
             }
-            dim_vals[i] = v;
-        }
-        if (bad_dim) { rep.rows_filtered_out++; continue; }
+            if (dropped) { rep.rows_filtered_out++; continue; }
 
-        for (std::size_t i = 0; i < opts.dimensions.size(); ++i) {
-            dim_sinks[i]->write(dim_vals[i]);
-            auto& s = dim_stats[i];
-            if (dim_vals[i] < s.minv) s.minv = dim_vals[i];
-            if (dim_vals[i] > s.maxv) s.maxv = dim_vals[i];
-        }
-        for (std::size_t i = 0; i < opts.measures.size(); ++i) {
-            const auto& c = cols.at(meas_src[i]);
-            const double v = c.is_null[r] ? kNaN : c.value[r];
-            meas_sinks[i]->write(v);
-            auto& s = meas_stats[i];
-            if (std::isnan(v)) {
-                s.nan_n++;
-            } else {
-                s.non_nan++;
-                s.sum    += v;
-                s.sum_sq += v * v;
-                if (v < s.minv) s.minv = v;
-                if (v > s.maxv) s.maxv = v;
+            // Dimensions: a missing or out-of-bounds coordinate drops the row.
+            bool bad_dim = false;
+            for (std::size_t i = 0; i < opts.dimensions.size(); ++i) {
+                const auto& c = bcols[dim_pos[i]];
+                if (c.is_null[r]) { bad_dim = true; break; }
+                const double v = c.value[r];
+                if (v < opts.dimensions[i].low || v > opts.dimensions[i].high) {
+                    bad_dim = true; break;
+                }
+                dim_vals[i] = v;
             }
-        }
+            if (bad_dim) { rep.rows_filtered_out++; continue; }
 
-        rep.rows_written++;
-        if (have_cap && rep.rows_written >= cap) break;
+            for (std::size_t i = 0; i < opts.dimensions.size(); ++i) {
+                dim_sinks[i]->write(dim_vals[i]);
+                auto& s = dim_stats[i];
+                if (dim_vals[i] < s.minv) s.minv = dim_vals[i];
+                if (dim_vals[i] > s.maxv) s.maxv = dim_vals[i];
+            }
+            for (std::size_t i = 0; i < opts.measures.size(); ++i) {
+                const auto& c = bcols[meas_pos[i]];
+                const double v = c.is_null[r] ? kNaN : c.value[r];
+                meas_sinks[i]->write(v);
+                auto& s = meas_stats[i];
+                if (std::isnan(v)) {
+                    s.nan_n++;
+                } else {
+                    s.non_nan++;
+                    s.sum    += v;
+                    s.sum_sq += v * v;
+                    if (v < s.minv) s.minv = v;
+                    if (v > s.maxv) s.maxv = v;
+                }
+            }
+
+            rep.rows_written++;
+            if (have_cap && rep.rows_written >= cap) { cap_reached = true; break; }
+        }
     }
 
     dim_sinks.clear();

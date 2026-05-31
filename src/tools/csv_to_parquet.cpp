@@ -108,11 +108,10 @@ CsvToParquetReport csv_to_parquet(const CsvToParquetOptions& opts) {
     auto out = unwrap(arrow::io::FileOutputStream::Open(opts.output_path.string()),
                       "cannot open output parquet: " + opts.output_path.string());
 
-    // Pin writer properties so the same input yields a byte-stable file:
-    // no compression, no dictionary, fixed version.
+
     parquet::WriterProperties::Builder builder;
-    builder.compression(parquet::Compression::UNCOMPRESSED);
-    builder.disable_dictionary();
+    builder.compression(parquet::Compression::ZSTD);
+    builder.enable_dictionary();
     builder.version(parquet::ParquetVersion::PARQUET_2_6);
     auto props = builder.build();
 
