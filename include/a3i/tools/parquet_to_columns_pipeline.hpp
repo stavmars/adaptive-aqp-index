@@ -50,6 +50,7 @@ struct ConvertOptions {
     std::vector<std::string>        measures;
     std::vector<ValidationFilter>   validation_filters;
     std::optional<std::uint64_t>    max_rows;       ///< Take only the first N post-filter rows.
+    std::optional<std::string>      parent_dataset_id; ///< For a --max-rows subset: the full dataset it is a prefix of.
     bool                            overwrite = false;
     std::string                     converter_version = "0.1.0";
 };

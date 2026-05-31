@@ -361,9 +361,41 @@ ConvertReport run_parquet_to_columns(const ConvertOptions& opts) {
         m.domain_bounds.dims.push_back(Range{dr.low, dr.high});
     }
     m.null_encoding     = "NaN";
-    m.source_file       = std::filesystem::absolute(opts.input_parquet).string();
-    m.source_sha256     = "";
-    if (opts.max_rows) m.source_prefix_rows = *opts.max_rows;
+
+    auto op_token = [](ValidationFilter::Op op) -> const char* {
+        switch (op) {
+            case ValidationFilter::Op::Lt: return "<";
+            case ValidationFilter::Op::Le: return "<=";
+            case ValidationFilter::Op::Gt: return ">";
+            case ValidationFilter::Op::Ge: return ">=";
+            case ValidationFilter::Op::Eq: return "==";
+            case ValidationFilter::Op::Ne: return "!=";
+        }
+        return "?";
+    };
+    m.applied_drop_if.reserve(opts.validation_filters.size());
+    for (const auto& f : opts.validation_filters) {
+        std::ostringstream oss;
+        oss << f.name << ' ' << op_token(f.op) << ' ' << f.value;
+        m.applied_drop_if.push_back(oss.str());
+    }
+
+    m.source_parquet = std::filesystem::absolute(opts.input_parquet).string();
+    std::error_code ec;
+    const auto sz = std::filesystem::file_size(opts.input_parquet, ec);
+    m.source_bytes = ec ? 0 : static_cast<std::uint64_t>(sz);
+    const auto wt = std::filesystem::last_write_time(opts.input_parquet, ec);
+    if (ec) {
+        m.source_mtime = 0;
+    } else {
+        // Store as Unix epoch seconds so the prepare script (and any reader)
+        // can compare against a plain stat() mtime for the staleness check.
+        const auto sys = std::chrono::clock_cast<std::chrono::system_clock>(wt);
+        m.source_mtime =
+            std::chrono::duration_cast<std::chrono::seconds>(sys.time_since_epoch()).count();
+    }
+    if (opts.max_rows) m.max_rows = *opts.max_rows;
+    if (opts.parent_dataset_id) m.parent_dataset_id = *opts.parent_dataset_id;
     m.converter_version = opts.converter_version;
     m.created_utc       = utc_iso8601_now();
 

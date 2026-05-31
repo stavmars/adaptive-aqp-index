@@ -77,24 +77,24 @@ TEST(DefaultColumnNames, PaddingByDigitWidth) {
     using a3i::default_column_names;
     {
         auto names = default_column_names(10);
-        // 10 cols -> indices 0..9, single-digit width -> column0..column9
+        // 10 cols -> indices 0..9, single-digit width -> col0..col9
         ASSERT_EQ(names.size(), 10u);
-        EXPECT_EQ(names.front(), "column0");
-        EXPECT_EQ(names.back(),  "column9");
+        EXPECT_EQ(names.front(), "col0");
+        EXPECT_EQ(names.back(),  "col9");
     }
     {
         auto names = default_column_names(18);
-        // 18 cols -> indices 0..17, two-digit width -> column00..column17
+        // 18 cols -> indices 0..17, two-digit width -> col00..col17
         ASSERT_EQ(names.size(), 18u);
-        EXPECT_EQ(names.front(), "column00");
-        EXPECT_EQ(names.back(),  "column17");
+        EXPECT_EQ(names.front(), "col00");
+        EXPECT_EQ(names.back(),  "col17");
     }
     {
         auto names = default_column_names(100);
         // 100 cols -> indices 0..99, two-digit width
         ASSERT_EQ(names.size(), 100u);
-        EXPECT_EQ(names.front(), "column00");
-        EXPECT_EQ(names.back(),  "column99");
+        EXPECT_EQ(names.front(), "col00");
+        EXPECT_EQ(names.back(),  "col99");
     }
 }
 
@@ -159,8 +159,8 @@ TEST(BinaryColumnStore, HeaderlessUsesPositionalColumnNames) {
     opts.input_parquet = to_parquet(csv, /*has_header=*/false);
     opts.output_dir = tmp / "prep";
     opts.dataset_id = "synth_tiny";
-    opts.dimensions = {{"column0", 0.0, 1.0}, {"column1", 0.0, 1.0}};
-    opts.measures   = {"column2"};
+    opts.dimensions = {{"col0", 0.0, 1.0}, {"col1", 0.0, 1.0}};
+    opts.measures   = {"col2"};
 
     const auto rep = a3i::run_parquet_to_columns(opts);
     EXPECT_EQ(rep.rows_written, 2u);
@@ -172,11 +172,11 @@ TEST(BinaryColumnStore, HeaderlessUsesPositionalColumnNames) {
     // Manifest preserves the synthesized names + source indices.
     const auto& m = store.manifest();
     ASSERT_EQ(m.dimensions.size(), 2u);
-    EXPECT_EQ(m.dimensions[0].name, "column0");
+    EXPECT_EQ(m.dimensions[0].name, "col0");
     EXPECT_EQ(m.dimensions[0].source_index, 0u);
-    EXPECT_EQ(m.dimensions[1].name, "column1");
+    EXPECT_EQ(m.dimensions[1].name, "col1");
     EXPECT_EQ(m.dimensions[1].source_index, 1u);
-    EXPECT_EQ(m.measures[0].name, "column2");
+    EXPECT_EQ(m.measures[0].name, "col2");
     EXPECT_EQ(m.measures[0].source_index, 2u);
 }
 
@@ -307,8 +307,8 @@ TEST(BinaryColumnStore, MaxRowsCaps) {
 
     a3i::BinaryColumnStore store(rep.manifest_path);
     EXPECT_EQ(store.row_count(), 5u);
-    EXPECT_TRUE(store.manifest().source_prefix_rows.has_value());
-    EXPECT_EQ(*store.manifest().source_prefix_rows, 5u);
+    EXPECT_TRUE(store.manifest().max_rows.has_value());
+    EXPECT_EQ(*store.manifest().max_rows, 5u);
 }
 
 // --- Idempotency / overwrite -------------------------------------------

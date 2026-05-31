@@ -75,9 +75,12 @@ void write_manifest(const std::filesystem::path& manifest_path, const Manifest& 
     doc["domain_bounds"] = { {"low", low}, {"high", high} };
 
     doc["null_encoding"]     = m.null_encoding;
-    doc["source_file"]       = m.source_file;
-    doc["source_sha256"]     = m.source_sha256;
-    if (m.source_prefix_rows) doc["source_prefix_rows"] = *m.source_prefix_rows;
+    doc["applied_drop_if"]   = m.applied_drop_if;
+    doc["source_parquet"]    = m.source_parquet;
+    doc["source_bytes"]      = m.source_bytes;
+    doc["source_mtime"]      = m.source_mtime;
+    if (m.parent_dataset_id) doc["parent_dataset_id"] = *m.parent_dataset_id;
+    if (m.max_rows)          doc["max_rows"]          = *m.max_rows;
     doc["converter_version"] = m.converter_version;
     doc["created_utc"]       = m.created_utc;
 
@@ -142,10 +145,17 @@ Manifest read_manifest(const std::filesystem::path& manifest_path) {
         }
 
         m.null_encoding     = doc.value("null_encoding", std::string{"NaN"});
-        m.source_file       = doc.value("source_file", std::string{});
-        m.source_sha256     = doc.value("source_sha256", std::string{});
-        if (doc.contains("source_prefix_rows") && !doc["source_prefix_rows"].is_null()) {
-            m.source_prefix_rows = doc["source_prefix_rows"].get<std::uint64_t>();
+        if (doc.contains("applied_drop_if") && doc["applied_drop_if"].is_array()) {
+            m.applied_drop_if = doc["applied_drop_if"].get<std::vector<std::string>>();
+        }
+        m.source_parquet    = doc.value("source_parquet", std::string{});
+        m.source_bytes      = doc.value("source_bytes", std::uint64_t{0});
+        m.source_mtime      = doc.value("source_mtime", std::int64_t{0});
+        if (doc.contains("parent_dataset_id") && !doc["parent_dataset_id"].is_null()) {
+            m.parent_dataset_id = doc["parent_dataset_id"].get<std::string>();
+        }
+        if (doc.contains("max_rows") && !doc["max_rows"].is_null()) {
+            m.max_rows = doc["max_rows"].get<std::uint64_t>();
         }
         m.converter_version = doc.value("converter_version", std::string{});
         m.created_utc       = doc.value("created_utc", std::string{});

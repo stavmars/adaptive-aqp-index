@@ -1,0 +1,10 @@
+# NYC Yellow Cab trip records, 2013-2014 (pre-cleaned merge).
+# Dimensions are pickup longitude/latitude; the four measures are listed in the
+# order the experiment layer's num-measures sweep consumes them (the first k).
+dataset_id: taxi
+source:
+  parquet: taxi/yellow_tripdata_2013_2014_cleaned.parquet
+dimensions:
+  - {name: pickup_lon, bounds: [-74.106216, -73.842545]}
+  - {name: pickup_lat, bounds: [40.676993, 40.839788]}
+measures: [fare_amount, total_amount, trip_distance, passenger_count]

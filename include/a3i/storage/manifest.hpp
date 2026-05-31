@@ -57,9 +57,12 @@ struct Manifest {
     std::vector<MeasureDescriptor> measures;
     HyperRect domain_bounds;
     std::string null_encoding = "NaN";
-    std::string source_file;           ///< Absolute path of the CSV the converter consumed.
-    std::string source_sha256;         ///< Optional; empty if not computed.
-    std::optional<std::uint64_t> source_prefix_rows; ///< Set when --max-rows was used.
+    std::vector<std::string> applied_drop_if; ///< Drop predicates applied at conversion, as "name op value" strings.
+    std::string source_parquet;        ///< Absolute path of the Parquet the converter consumed.
+    std::uint64_t source_bytes = 0;    ///< Size of the source Parquet in bytes (cheap staleness check).
+    std::int64_t source_mtime = 0;     ///< Source last-write time as Unix epoch seconds (cheap staleness check).
+    std::optional<std::string> parent_dataset_id; ///< Set for a --max-rows subset: the full dataset it is a prefix of.
+    std::optional<std::uint64_t> max_rows;        ///< Set when --max-rows capped the prepared row count.
     std::string converter_version;
     std::string created_utc;           ///< ISO-8601, e.g. "2026-05-28T12:34:56Z".
 };

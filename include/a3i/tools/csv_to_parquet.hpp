@@ -12,12 +12,9 @@
 // baseline systems read this same file, so every system sees identical,
 // already-typed rows and nothing re-parses text.
 //
-// A headerless source has no names
-// to carry over, so this step synthesizes positional `column0`, `column1`,
-// ... names into the schema.
-//
-// Kept out of the regular prepare flow; run by an operator when onboarding
-// a dataset.
+// Column names come from the header row when present; a headerless source
+// has none to carry over, so this step synthesizes positional `col0`,
+// `col1`, ... names into the schema.
 
 #pragma once
 
@@ -48,10 +45,10 @@ struct CsvToParquetReport {
 /// std::invalid_argument on malformed options.
 CsvToParquetReport csv_to_parquet(const CsvToParquetOptions& opts);
 
-/// Synthesize positional column names for `num_columns` columns: "column"
+/// Synthesize positional column names for `num_columns` columns: "col"
 /// + zero-padded zero-based index, padded to `len(str(num_columns - 1))`
-/// digits. So 1..9 columns yield `column0..column8`; 10..99 columns yield
-/// `column00..column99`. Used to name the columns of a headerless source,
+/// digits. So 1..9 columns yield `col0..col8`; 10..99 columns yield
+/// `col00..col99`. Used to name the columns of a headerless source,
 /// which carries no names of its own.
 std::vector<std::string> default_column_names(std::size_t num_columns);
 

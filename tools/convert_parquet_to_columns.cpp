@@ -24,7 +24,7 @@ void print_usage(std::ostream& os) {
 "                              --dimension <name>:<lo>:<hi>   (one or more, repeatable)\n"
 "                              --measure   <name>             (one or more, repeatable)\n"
 "                              [--drop-if '<name><op><value>']  (repeatable)\n"
-"                              [--max-rows <N>] [--overwrite]\n"
+"                              [--max-rows <N>] [--parent-dataset-id <id>] [--overwrite]\n"
 "\n"
 "Reads the dataset's Parquet (produced once by csv_to_parquet or the\n"
 "synthetic generator) and resolves every column by name against its schema.\n"
@@ -93,13 +93,20 @@ a3i::ValidationFilter parse_filter(std::string_view s) {
         {">=", Op::Ge}, {"<=", Op::Le}, {"==", Op::Eq}, {"!=", Op::Ne},
         {">",  Op::Gt}, {"<",  Op::Lt},
     };
+    auto trim = [](std::string_view v) {
+        const auto b = v.find_first_not_of(" \t");
+        const auto e = v.find_last_not_of(" \t");
+        return b == std::string_view::npos ? std::string{} : std::string(v.substr(b, e - b + 1));
+    };
     for (const auto& [tok, op] : ops) {
         const auto pos = s.find(tok);
         if (pos != std::string_view::npos) {
             a3i::ValidationFilter f;
-            f.name  = std::string(s.substr(0, pos));
+            // Trim so a predicate written with spaces ("NUMBER OBSERVERS < 1")
+            // resolves to the exact column name and a clean numeric literal.
+            f.name  = trim(s.substr(0, pos));
             f.op    = op;
-            f.value = std::stod(std::string(s.substr(pos + tok.size())));
+            f.value = std::stod(trim(s.substr(pos + tok.size())));
             if (f.name.empty()) throw std::runtime_error("--drop-if missing name");
             return f;
         }
@@ -117,7 +124,7 @@ int main(int argc, char** argv) try {
 
     a3i::ConvertOptions opts;
     std::string input_parquet, output_dir, prepared_root, dataset_id;
-    std::string max_rows_str;
+    std::string max_rows_str, parent_dataset_id;
 
     int i = 1;
     while (i < argc) {
@@ -127,6 +134,7 @@ int main(int argc, char** argv) try {
         if (eat_kv(i, argc, argv, "--prepared-root", val)) { prepared_root = val; continue; }
         if (eat_kv(i, argc, argv, "--dataset-id",    val)) { dataset_id = val; continue; }
         if (eat_kv(i, argc, argv, "--max-rows",      val)) { max_rows_str = val; continue; }
+        if (eat_kv(i, argc, argv, "--parent-dataset-id", val)) { parent_dataset_id = val; continue; }
         if (eat_kv(i, argc, argv, "--dimension",     val)) { opts.dimensions.push_back(parse_dimension(val)); continue; }
         if (eat_kv(i, argc, argv, "--measure",       val)) { opts.measures.push_back(val); continue; }
         if (eat_kv(i, argc, argv, "--drop-if",       val)) { opts.validation_filters.push_back(parse_filter(val)); continue; }
@@ -147,6 +155,7 @@ int main(int argc, char** argv) try {
     opts.output_dir    = output_dir;
     opts.dataset_id    = dataset_id;
     if (!max_rows_str.empty()) opts.max_rows = std::stoull(max_rows_str);
+    if (!parent_dataset_id.empty()) opts.parent_dataset_id = parent_dataset_id;
 
     const auto rep = a3i::run_parquet_to_columns(opts);
     std::cout << "wrote " << rep.manifest_path << '\n'

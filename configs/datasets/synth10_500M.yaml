@@ -1,0 +1,22 @@
+# Synthetic 10-column uniform dataset, 500M rows. See synth10_1M.yaml for the
+# column layout; only dataset_id and the generated row count differ.
+dataset_id: synth10_500M
+source:
+  generator:
+    seed: 0
+    rows: 500000000
+    columns:
+      - {name: col0, dist: uniform, p0: 0, p1: 1000}
+      - {name: col1, dist: uniform, p0: 0, p1: 1000}
+      - {name: col2, dist: uniform, p0: 0, p1: 1000}
+      - {name: col3, dist: uniform, p0: 0, p1: 1000}
+      - {name: col4, dist: uniform, p0: 0, p1: 1000}
+      - {name: col5, dist: uniform, p0: 0, p1: 1000}
+      - {name: col6, dist: uniform, p0: 0, p1: 1000}
+      - {name: col7, dist: uniform, p0: 0, p1: 1000}
+      - {name: col8, dist: uniform, p0: 0, p1: 1000}
+      - {name: col9, dist: uniform, p0: 0, p1: 1000}
+dimensions:
+  - {name: col0, bounds: [0, 1000]}
+  - {name: col1, bounds: [0, 1000]}
+measures: [col2, col3, col4, col5, col6, col7, col8, col9]

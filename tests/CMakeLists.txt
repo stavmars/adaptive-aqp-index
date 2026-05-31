@@ -55,6 +55,23 @@ set_tests_properties(
     PROPERTIES LABELS m_source_parquet
 )
 
+# Dataset preparation: a script-level smoke test that drives
+# scripts/prepare_dataset.py end to end on tiny fixtures (generate/convert/
+# verify, the drop_if+bounds survival rule, null -> NaN, idempotency, and a
+# --max-rows subset). Registered only when a Python interpreter is available;
+# the C++ build itself never depends on Python. A3I_BUILD_DIR points the script
+# at this build's tools/ directory regardless of the build location.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME m_data_prep.prepare_smoke
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_data_prep_smoke.py)
+    set_tests_properties(m_data_prep.prepare_smoke PROPERTIES
+        LABELS m_data_prep
+        ENVIRONMENT "A3I_BUILD_DIR=${CMAKE_BINARY_DIR}")
+else()
+    message(STATUS "Python3 interpreter not found; skipping m_data_prep smoke test")
+endif()
+
 # Statistical gate: seeded sanity plus the empirical CI-coverage sweep
 # (including the recorded heavy-tail under-coverage). Kept out of the fast
 # `unit` label because it runs many seeds.

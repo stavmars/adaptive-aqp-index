@@ -1,0 +1,25 @@
+# eBird US, 2023-2026, continental US (CONUS).
+#
+# Dimensions are longitude/latitude (CONUS bounds). The four measures span a
+# wide spread of coefficient-of-variation (heavy-tailed stress dataset) and are
+# listed in the order the num-measures sweep consumes them (the first k).
+#
+# null_string: observation counts recorded as "X" (present-but-uncounted) map to
+# NaN for OBSERVATION COUNT while keeping the row. drop_if removes whole rows
+# with physically impossible values: durations over 24h and non-positive
+# observer counts.
+dataset_id: ebird_us
+source:
+  parquet: ebird_us/ebd_US_2023_2026.parquet
+dimensions:
+  - {name: LONGITUDE, bounds: [-125.96, -66.24]}
+  - {name: LATITUDE, bounds: [24.03, 49.36]}
+measures:
+  - "DURATION MINUTES"
+  - "EFFORT DISTANCE KM"
+  - "NUMBER OBSERVERS"
+  - "OBSERVATION COUNT"
+null_string: "X"
+drop_if:
+  - "DURATION MINUTES > 1440"
+  - "NUMBER OBSERVERS < 1"

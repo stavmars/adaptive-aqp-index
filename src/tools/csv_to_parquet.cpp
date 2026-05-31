@@ -38,7 +38,7 @@ std::vector<std::string> default_column_names(std::size_t num_columns) {
     for (std::size_t i = 0; i < num_columns; ++i) {
         auto s = std::to_string(i);
         if (s.size() < width) s.insert(0, width - s.size(), '0');
-        names.push_back("column" + s);
+        names.push_back("col" + s);
     }
     return names;
 }
@@ -64,7 +64,7 @@ CsvToParquetReport csv_to_parquet(const CsvToParquetOptions& opts) {
 
     auto read_opts  = arrow::csv::ReadOptions::Defaults();
     // For a headerless file we let the reader treat the first line as data
-    // and emit positional names, then rename to stable `columnNN` names below.
+    // and emit positional names, then rename to stable `colNN` names below.
     read_opts.autogenerate_column_names = !opts.has_header;
 
     auto parse_opts     = arrow::csv::ParseOptions::Defaults();

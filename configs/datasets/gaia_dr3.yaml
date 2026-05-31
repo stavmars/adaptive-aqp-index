@@ -1,0 +1,13 @@
+# Gaia DR3 spatial benchmark (10% sample of gaiadr3.gaia_source, shuffled).
+#
+# Dimensions are ra/dec (degrees). The eight measures are listed in the
+# distance-led order the num-measures sweep consumes (the first k): parallax,
+# G-band magnitude, proper motion (ra, dec), BP/RP magnitudes, the astrometric
+# quality flag (ruwe), and the astrometric excess-noise residual.
+dataset_id: gaia_dr3
+source:
+  parquet: gaia_dr3/gaia_dr3_benchmark_shuffled.parquet
+dimensions:
+  - {name: ra, bounds: [0, 360]}
+  - {name: dec, bounds: [-90, 90]}
+measures: [parallax, phot_g_mean_mag, pmra, pmdec, phot_bp_mean_mag, phot_rp_mean_mag, ruwe, astrometric_excess_noise]

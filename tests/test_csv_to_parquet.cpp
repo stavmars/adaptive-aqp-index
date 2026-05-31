@@ -103,7 +103,7 @@ TEST(CsvToParquet, HeaderedTypesNamesAndOrder) {
     EXPECT_TRUE(label->IsNull(2));
 }
 
-// A headerless input gets positional names column0, column1, ...
+// A headerless input gets positional names col0, col1, ...
 TEST(CsvToParquet, HeaderlessSynthesizesPositionalNames) {
     TempDir tmp;
     const auto csv = tmp / "in.csv";
@@ -119,12 +119,12 @@ TEST(CsvToParquet, HeaderlessSynthesizesPositionalNames) {
     const auto rep = a3i::csv_to_parquet(opts);
 
     ASSERT_EQ(rep.column_names.size(), 2u);
-    EXPECT_EQ(rep.column_names[0], "column0");
-    EXPECT_EQ(rep.column_names[1], "column1");
+    EXPECT_EQ(rep.column_names[0], "col0");
+    EXPECT_EQ(rep.column_names[1], "col1");
 
     auto table = read_parquet(opts.output_path);
-    EXPECT_EQ(table->schema()->field(0)->name(), "column0");
-    EXPECT_EQ(table->schema()->field(1)->name(), "column1");
+    EXPECT_EQ(table->schema()->field(0)->name(), "col0");
+    EXPECT_EQ(table->schema()->field(1)->name(), "col1");
     EXPECT_EQ(table->num_rows(), 2);
 }
 
