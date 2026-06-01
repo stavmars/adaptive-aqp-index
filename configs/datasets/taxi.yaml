@@ -5,6 +5,6 @@ dataset_id: taxi
 source:
   parquet: taxi/yellow_tripdata_2013_2014_cleaned.parquet
 dimensions:
-  - {name: pickup_lon, bounds: [-74.106216, -73.842545]}
-  - {name: pickup_lat, bounds: [40.676993, 40.839788]}
+  - {name: pickup_longitude, bounds: [-74.106216, -73.842545]}
+  - {name: pickup_latitude, bounds: [40.676993, 40.839788]}
 measures: [fare_amount, total_amount, trip_distance, passenger_count]
