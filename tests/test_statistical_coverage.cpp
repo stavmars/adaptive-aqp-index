@@ -59,7 +59,10 @@ private:
 
 // A single-measure dataset built from an explicit value column. Row i sits at
 // (i, 0.5) so every row has a distinct x coordinate and rectangles on x select
-// a contiguous, known prefix/suffix of the rows.
+// a contiguous, known prefix/suffix of the rows. An optional null mask marks
+// rows whose measure value is missing: those are written as an empty CSV field,
+// which the converter encodes as NaN. COUNT(measure) then counts only the
+// non-null rows and is genuinely distinct from the exact COUNT(*).
 struct Dataset {
     TempDir                          tmp;
     std::optional<BinaryColumnStore> store;
@@ -67,7 +70,8 @@ struct Dataset {
     std::vector<double>              xs, ys;
     double                           xhi = 0.0;
 
-    Dataset(const std::string& id, const std::vector<double>& values) {
+    Dataset(const std::string& id, const std::vector<double>& values,
+            const std::vector<char>* nulls = nullptr) {
         const std::size_t n = values.size();
         xhi = static_cast<double>(n);
         const auto csv = tmp / "data.csv";
@@ -77,7 +81,12 @@ struct Dataset {
             for (std::size_t i = 0; i < n; ++i) {
                 xs.push_back(static_cast<double>(i));
                 ys.push_back(0.5);
-                o << i << ',' << 0.5 << ',' << values[i] << '\n';
+                o << i << ',' << 0.5 << ',';
+                if (nulls != nullptr && (*nulls)[i]) {
+                    o << '\n';  // empty measure field -> null -> NaN
+                } else {
+                    o << values[i] << '\n';
+                }
             }
         }
         const auto parquet = tmp / "data.parquet";
@@ -160,10 +169,11 @@ double coverage_floor(int n, double z = 3.0) {
 }
 
 // Sweep several x-rectangles, each over many seeds, accumulating how often the
-// certified SUM interval brackets the rectangle's true SUM. Each (rectangle,
-// seed) trial uses a fresh table/path/engine so the draws are independent and
-// no cracking carries over.
-CoverageStats sweep(const Dataset& d, double rel, int seeds) {
+// certified interval for `op` brackets the rectangle's true aggregate value.
+// Each (rectangle, seed) trial uses a fresh table/path/engine so the draws are
+// independent and no cracking carries over.
+CoverageStats sweep(const Dataset& d, double rel, int seeds,
+                    AggregateOp op = AggregateOp::Sum) {
     const double            n = d.xhi;
     const std::vector<std::pair<double, double>> rects = {
         {0.0, n},
@@ -178,8 +188,8 @@ CoverageStats sweep(const Dataset& d, double rel, int seeds) {
     for (const auto& [xlo, xhi_q] : rects) {
         const RangeQuery oq = d.query(xlo, xhi_q, /*rel=*/0.0);
         const QueryResult oracle = exact_scan(*d.store, d.schema, oq);
-        const double true_sum = find(oracle, AggregateOp::Sum, 0).estimate;
-        const double tol = 1e-6 * std::max(1.0, std::abs(true_sum));
+        const double true_val = find(oracle, op, 0).estimate;
+        const double tol = 1e-6 * std::max(1.0, std::abs(true_val));
 
         for (int s = 1; s <= seeds; ++s) {
             IndexTable           table = d.make_table();
@@ -191,9 +201,9 @@ CoverageStats sweep(const Dataset& d, double rel, int seeds) {
 
             const QueryResult got =
                 engine.execute(d.query(xlo, xhi_q, rel), static_cast<std::uint64_t>(s));
-            const auto& e = find(got, AggregateOp::Sum, 0);
+            const auto& e = find(got, op, 0);
             const bool covered =
-                e.ci_low - tol <= true_sum && true_sum <= e.ci_high + tol;
+                e.ci_low - tol <= true_val && true_val <= e.ci_high + tol;
 
             ++cs.trials;
             cs.covered += covered ? 1 : 0;
@@ -282,4 +292,47 @@ TEST(StatisticalCoverage, HeavyTailUnderCoverageIsRecorded) {
     // The recorded coverage only means something if the loop actually sampled;
     // the coverage value itself is intentionally not asserted.
     EXPECT_GT(cs.sampled, 0) << "heavy-tail sweep never sampled";
+}
+
+// COUNT(measure) coverage on a measure with a genuine null fraction. When a
+// measure is never null, COUNT(measure) equals the always-exact COUNT(*) and
+// its interval is degenerate, so it never exercises the Bernoulli presence
+// estimator. Here roughly 40% of rows are null, so COUNT(measure) is a real
+// sampled aggregate -- the estimator scales an observed presence rate up to the
+// rectangle and reports a Bernoulli interval. The presence indicator is a
+// bounded [0,1] variable, so its sampling distribution is well-behaved and the
+// certified 95% interval must cover the true non-null count near nominal.
+TEST(StatisticalCoverage, NullBearingCountCoversNearNominal) {
+    const std::size_t   kN = 20000;
+    std::vector<double> values(kN, 1.0);
+    std::vector<char>   nulls(kN, 0);
+    std::mt19937_64                        gen(424242);
+    std::bernoulli_distribution            present(0.6);  // ~40% null
+    for (std::size_t i = 0; i < kN; ++i) nulls[i] = present(gen) ? 0 : 1;
+    Dataset d("cov_null_count", values, &nulls);
+
+    const CoverageStats cs =
+        sweep(d, /*rel=*/0.05, /*seeds=*/80, AggregateOp::CountMeasure);
+
+    RecordProperty("trials", cs.trials);
+    RecordProperty("sampled_trials", cs.sampled);
+    RecordProperty("overall_coverage_x1000",
+                   static_cast<int>(std::lround(cs.overall() * 1000)));
+    RecordProperty("sampled_coverage_x1000",
+                   static_cast<int>(std::lround(cs.sampled_coverage() * 1000)));
+
+    std::cout << "[ null-count ] sampled trials=" << cs.sampled << '/' << cs.trials
+              << " sampled coverage=" << cs.sampled_coverage()
+              << " overall coverage=" << cs.overall() << " (nominal 0.95)"
+              << std::endl;
+
+    // The sweep must produce a meaningful number of sampled (non-exact) COUNT
+    // intervals, otherwise the coverage statistic is vacuous.
+    EXPECT_GE(cs.sampled, 30) << "too few approximate COUNT answers to judge coverage";
+    const double floor = coverage_floor(cs.sampled);
+    EXPECT_GE(cs.sampled_coverage(), floor)
+        << "sampled COUNT coverage " << cs.sampled_coverage()
+        << " below binomial floor " << floor;
+    EXPECT_LE(cs.sampled_coverage(), 1.0);
+    EXPECT_GE(cs.overall(), floor) << "overall COUNT coverage too low";
 }

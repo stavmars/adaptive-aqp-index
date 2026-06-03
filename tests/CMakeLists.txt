@@ -74,6 +74,18 @@ else()
     message(STATUS "Python3 interpreter not found; skipping m_data_prep smoke test")
 endif()
 
+# Experiment pipeline: a hermetic end-to-end smoke test driving
+# scripts/run_experiments.py and scripts/validate_results.py over a tiny
+# synthetic dataset in a temp tree (prepare -> run cells -> validate), asserting
+# the exact ladder matches the scan oracle. Warm (no sudo / no cache drop).
+if(Python3_Interpreter_FOUND)
+    add_test(NAME m_experiments.pipeline_smoke
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_experiments_smoke.py)
+    set_tests_properties(m_experiments.pipeline_smoke PROPERTIES
+        LABELS m_experiments
+        ENVIRONMENT "A3I_BUILD_DIR=${CMAKE_BINARY_DIR}")
+endif()
+
 # Statistical gate: seeded sanity plus the empirical CI-coverage sweep
 # (including the recorded heavy-tail under-coverage). Kept out of the fast
 # `unit` label because it runs many seeds.
