@@ -198,6 +198,28 @@ TEST(QueryEngine, GatherOrderDoesNotChangeExactAnswer) {
     }
 }
 
+// Eager (in-memory) measure storage is a backing choice, not a correctness one:
+// reading the columns resident must reproduce the same answer as the
+// memory-mapped default the rest of the suite uses.
+TEST(QueryEngine, EagerMeasureStorageReproducesOracle) {
+    Fixture f;
+    const RangeQuery q = query(2.0, 12.0, 3.0, 17.0, /*rel=*/0.05);
+    const QueryResult oracle = exact_scan(*f.store, f.schema, q);
+
+    BinaryColumnStore eager(f.schema.binary_manifest_path, /*selected=*/{},
+                            MeasureStorage::Eager);
+    IndexTable table = f.make_table();
+    AdaptiveKdAccessPath path(f.substrate());
+    path.prepare(table);
+
+    EngineConfig cfg;
+    cfg.accuracy_mode = EngineConfig::AccuracyMode::ForceExact;
+    QueryEngine engine(eager, table, path, cfg);
+
+    const QueryResult got = engine.execute(q, /*ordinal=*/1);
+    expect_matches_oracle(got, oracle);
+}
+
 TEST(QueryEngine, SelectedMeasureSubsetServesOnlyThoseMeasures) {
     Fixture f;
     const RangeQuery q = query(2.0, 12.0, 3.0, 17.0, /*rel=*/0.05);

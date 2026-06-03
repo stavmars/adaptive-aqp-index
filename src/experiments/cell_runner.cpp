@@ -265,7 +265,7 @@ CellReport run_cell(const CellConfig& config) {
         selected.reserve(nm);
         for (std::size_t i = 0; i < nm; ++i) selected.push_back(static_cast<MeasureId>(i));
     }
-    BinaryColumnStore store(config.manifest_path, selected);
+    BinaryColumnStore store(config.manifest_path, selected, config.measure_storage);
     const std::size_t served = store.measure_count();
 
     DatasetSchema schema;
@@ -361,6 +361,8 @@ CellReport run_cell(const CellConfig& config) {
         meta["leaf_min_size"]        = config.leaf_min_size;
         meta["stochastic_cracking"]  = config.stochastic_cracking;
         meta["sort_gather_by_row_id"] = config.sort_gather_by_row_id;
+        meta["measure_storage"]      =
+            config.measure_storage == MeasureStorage::Eager ? "eager" : "mmap";
         meta["run_id"]               = config.run_id;
         meta["sampling_seed"]        = config.run_id;
         meta["max_queries"]          = config.max_queries;

@@ -253,6 +253,67 @@ TEST(BinaryColumnStore, GatherReturnsValuesInInputOrder) {
     EXPECT_DOUBLE_EQ(out[5], 200.0);
 }
 
+// --- Eager (in-memory) storage matches the mmap backing -----------------
+
+TEST(BinaryColumnStore, EagerStorageMatchesMmap) {
+    TempDir tmp;
+    const auto csv = tmp / "e.csv";
+    {
+        std::string s = "x,m0,m1\n";
+        for (int i = 0; i < 12; ++i) {
+            s += std::to_string(i) + "," + std::to_string(i * 10) + "," +
+                 std::to_string(i * 100) + "\n";
+        }
+        write_text(csv, s);
+    }
+
+    a3i::ConvertOptions opts;
+    opts.input_parquet = to_parquet(csv, /*has_header=*/true);
+    opts.output_dir = tmp / "prep";
+    opts.dataset_id = "e";
+    opts.dimensions = {{"x", 0, 100}};
+    opts.measures   = {"m0", "m1"};
+    auto rep = a3i::run_parquet_to_columns(opts);
+    ASSERT_EQ(rep.rows_written, 12u);
+
+    a3i::BinaryColumnStore mmap_store(rep.manifest_path);
+    a3i::BinaryColumnStore eager_store(rep.manifest_path, /*selected=*/{},
+                                       a3i::MeasureStorage::Eager);
+
+    ASSERT_EQ(eager_store.measure_count(), mmap_store.measure_count());
+    ASSERT_EQ(eager_store.row_count(),     mmap_store.row_count());
+
+    for (std::size_t mi = 0; mi < mmap_store.measure_count(); ++mi) {
+        const auto m = static_cast<a3i::MeasureId>(mi);
+        auto col_mmap  = mmap_store.measure_column(m);
+        auto col_eager = eager_store.measure_column(m);
+        ASSERT_EQ(col_eager.size(), col_mmap.size());
+        for (std::size_t r = 0; r < col_mmap.size(); ++r) {
+            EXPECT_DOUBLE_EQ(col_eager[r], col_mmap[r]);
+            EXPECT_DOUBLE_EQ(
+                eager_store.measure_value(static_cast<a3i::RowId>(r), m),
+                mmap_store.measure_value(static_cast<a3i::RowId>(r), m));
+        }
+    }
+
+    // gather() over a scrambled order agrees value-for-value.
+    std::array<a3i::RowId, 5> ids{9, 0, 4, 11, 2};
+    std::array<double, 5> got_mmap{}, got_eager{};
+    mmap_store.gather(/*m=*/1, ids, got_mmap);
+    eager_store.gather(/*m=*/1, ids, got_eager);
+    EXPECT_EQ(got_eager, got_mmap);
+
+    // advise_sequential is a harmless no-op on a resident column.
+    EXPECT_NO_THROW(eager_store.advise_sequential(0));
+
+    // Subset selection is honored under eager backing (local id 0 -> manifest 1).
+    a3i::BinaryColumnStore eager_subset(rep.manifest_path, {1},
+                                        a3i::MeasureStorage::Eager);
+    ASSERT_EQ(eager_subset.measure_count(), 1u);
+    EXPECT_DOUBLE_EQ(eager_subset.measure_value(3, 0),
+                     mmap_store.measure_value(3, 1));
+}
+
 // --- Validation filters DROP rows; --max-rows caps after filtering ------
 
 TEST(BinaryColumnStore, ValidationFiltersDropRows) {

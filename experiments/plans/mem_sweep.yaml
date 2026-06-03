@@ -1,7 +1,4 @@
-# Memory sweep: hold every axis at default but vary the per-run memory cap on
-# the largest scalability point. Under a cap the eager-build baselines OOM at
-# 1B (recorded as status=error cells) while the lazy/sampled methods complete.
 plan_id: mem_sweep
 workloads:
   - synth10_1B_clustered
-mem: [unbounded, 16GiB, 36GiB]
+mem: [inmem, 16GiB, 36GiB]

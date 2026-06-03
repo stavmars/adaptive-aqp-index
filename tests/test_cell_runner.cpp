@@ -272,6 +272,7 @@ TEST(CellRunner, RunmetaRecordsResolvedConfig) {
     EXPECT_EQ(meta["sampling_seed"], 3);
     EXPECT_EQ(meta["queries_executed"], 3);
     EXPECT_EQ(meta["workload_fingerprint"], "424242");
+    EXPECT_EQ(meta["measure_storage"], "mmap");
 }
 
 TEST(CellRunner, UnknownMethodThrows) {

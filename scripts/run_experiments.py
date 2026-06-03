@@ -137,15 +137,27 @@ def load_workload_catalog(config_dir: Path) -> dict[str, dict]:
 
 # --- key / path helpers ------------------------------------------------------
 
+def mem_is_in_memory(mem: str) -> bool:
+    """The `inmem` setting loads the measure columns fully resident (eager) at
+    open time instead of memory-mapping them. Like `unbounded` it is uncapped;
+    unlike it, the run touches no page-fault path. Mutually exclusive with a cap
+    (resident columns are anonymous memory, not reclaimable page cache)."""
+    return mem in ("inmem", "INMEM")
+
+
 def mem_tag(mem: str) -> str:
     if mem in ("unbounded", "UNB", None):
         return "UNB"
+    if mem_is_in_memory(mem):
+        return "INMEM"
     # e.g. "16GiB" -> "16G", "8GiB" -> "8G", "512MiB" -> "512M".
     return mem.replace("iB", "").replace("B", "").upper()
 
 
 def mem_bytes(mem: str) -> int | None:
-    if mem in ("unbounded", "UNB", None):
+    # No cgroup cap for either uncapped setting (unbounded mmap, or inmem
+    # resident); only a byte budget like "16GiB" wraps the run in a launcher.
+    if mem in ("unbounded", "UNB", None) or mem_is_in_memory(mem):
         return None
     units = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
     s = mem.replace("iB", "").replace("B", "").strip().upper()
@@ -374,6 +386,12 @@ def run_cell(a3i_run: Path, cell: Cell, manifest: Path, workload_csv: Path,
         cmd += ["--error-bound", repr(float(cell.eb))]
     if cell.max_queries not in (None, 0):
         cmd += ["--max-queries", str(cell.max_queries)]
+
+    # Storage backing is derived from the mem axis: `inmem` loads measures
+    # resident, every other setting memory-maps them. The `mem<MemTag>` cell-key
+    # segment keeps the two backings in separate cells, so they are never pooled.
+    if mem_is_in_memory(cell.mem):
+        cmd += ["--in-memory"]
 
     cap = mem_bytes(cell.mem)
     if cap is not None:

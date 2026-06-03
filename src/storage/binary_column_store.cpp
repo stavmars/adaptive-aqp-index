@@ -43,9 +43,11 @@ std::vector<double> read_double_file(const std::filesystem::path& path,
 }  // namespace
 
 BinaryColumnStore::BinaryColumnStore(const std::filesystem::path& manifest_path,
-                                     std::vector<MeasureId> selected_measures)
+                                     std::vector<MeasureId> selected_measures,
+                                     MeasureStorage measure_storage)
     : manifest_(read_manifest(manifest_path)),
-      manifest_dir_(manifest_path.parent_path()) {
+      manifest_dir_(manifest_path.parent_path()),
+      storage_mode_(measure_storage) {
 
     // Resolve which measure columns to expose. An empty selection means every
     // measure in manifest order; otherwise the caller's list fixes both the
@@ -77,13 +79,33 @@ BinaryColumnStore::BinaryColumnStore(const std::filesystem::path& manifest_path,
         dim_columns_.push_back(read_double_file(path, manifest_.row_count));
     }
 
-    // Measure columns are memory-mapped rather than loaded. Sampling touches
-    // scattered rows; loading the whole column wastes memory and startup time.
-    // MADV_RANDOM tells the kernel not to read-ahead past the touched page —
-    // appropriate for point-lookups. Callers that will sweep a contiguous range
-    // should promote the relevant region to MADV_SEQUENTIAL / MADV_WILLNEED before calling gather().
-    // Only the exposed measures are mapped; the rest stay untouched on disk.
-    measure_regions_.resize(exposed_measures_.size());
+    // The exposed measure columns are backed per the storage mode; either way
+    // a per-column handle (data pointer + length) lands in measure_views_, which
+    // every accessor indexes so the hot path never branches on the mode.
+    measure_views_.resize(exposed_measures_.size());
+
+    if (storage_mode_ == MeasureStorage::Eager) {
+        // In-memory backing: read each exposed column fully resident, exactly
+        // as the dimensions are, so a read is a plain array index with no
+        // page-fault path. Meaningful only where the dataset fits in RAM.
+        measure_resident_.reserve(exposed_measures_.size());
+        for (std::size_t i = 0; i < exposed_measures_.size(); ++i) {
+            const auto& mz = manifest_.measures[exposed_measures_[i]];
+            measure_resident_.push_back(
+                read_double_file(manifest_dir_ / mz.file, manifest_.row_count));
+            measure_views_[i] = {measure_resident_[i].data(), manifest_.row_count};
+        }
+        return;
+    }
+
+    // Out-of-core backing: memory-map each exposed column rather than loading
+    // it. Sampling touches scattered rows; loading the whole column would waste
+    // memory and startup time. MADV_RANDOM tells the kernel not to read-ahead
+    // past the touched page — appropriate for point-lookups. Callers that will
+    // sweep a contiguous range should promote the region to MADV_SEQUENTIAL /
+    // MADV_WILLNEED before calling gather(). Only the exposed measures are
+    // mapped; the rest stay untouched on disk.
+    measure_maps_.resize(exposed_measures_.size());
     for (std::size_t i = 0; i < exposed_measures_.size(); ++i) {
         const auto& mz = manifest_.measures[exposed_measures_[i]];
         const auto path = manifest_dir_ / mz.file;
@@ -115,17 +137,18 @@ BinaryColumnStore::BinaryColumnStore(const std::filesystem::path& manifest_path,
             ::madvise(base, bytes, MADV_RANDOM);
         }
 
-        auto& r = measure_regions_[i];
+        auto& r = measure_maps_[i];
         r.base   = base;
         r.bytes  = bytes;
         r.fd     = fd;
-        r.length = manifest_.row_count;
-        r.data   = static_cast<const double*>(base);
+        measure_views_[i] = {static_cast<const double*>(base), manifest_.row_count};
     }
 }
 
 BinaryColumnStore::~BinaryColumnStore() {
-    for (auto& r : measure_regions_) {
+    // Only the mmap backing owns OS resources; the resident vectors free
+    // themselves. measure_maps_ is empty in Eager mode.
+    for (auto& r : measure_maps_) {
         if (r.base && r.bytes > 0) ::munmap(r.base, r.bytes);
         if (r.fd  >= 0)            ::close(r.fd);
     }
@@ -139,53 +162,55 @@ std::span<const double> BinaryColumnStore::dimension_column(DimensionId d) const
 }
 
 double BinaryColumnStore::measure_value(RowId r, MeasureId m) const {
-    if (m >= measure_regions_.size()) {
+    if (m >= measure_views_.size()) {
         throw std::out_of_range("measure_value: MeasureId out of range");
     }
-    const auto& reg = measure_regions_[m];
-    if (r >= reg.length) {
+    const auto& view = measure_views_[m];
+    if (r >= view.length) {
         throw std::out_of_range("measure_value: RowId out of range");
     }
-    return reg.data[r];
+    return view.data[r];
 }
 
 void BinaryColumnStore::gather(MeasureId m,
                                std::span<const RowId> row_ids,
                                std::span<double> out) const {
-    if (m >= measure_regions_.size()) {
+    if (m >= measure_views_.size()) {
         throw std::out_of_range("gather: MeasureId out of range");
     }
     if (row_ids.size() != out.size()) {
         throw std::invalid_argument("gather: row_ids and out must have equal size");
     }
-    const auto& reg = measure_regions_[m];
+    const auto& view = measure_views_[m];
 
     // Read in the order given by the caller; out[i] = value at row_ids[i].
     // Reordering for read locality is the caller's responsibility and should
     // be decided with measurements in hand.
     for (std::size_t i = 0; i < row_ids.size(); ++i) {
         const RowId r = row_ids[i];
-        if (r >= reg.length) {
+        if (r >= view.length) {
             throw std::out_of_range("gather: RowId out of range");
         }
-        out[i] = reg.data[r];
+        out[i] = view.data[r];
     }
 }
 
 std::span<const double> BinaryColumnStore::measure_column(MeasureId m) const {
-    if (m >= measure_regions_.size()) {
+    if (m >= measure_views_.size()) {
         throw std::out_of_range("measure_column: MeasureId out of range");
     }
-    const auto& reg = measure_regions_[m];
-    if (reg.data == nullptr || reg.length == 0) return {};
-    return std::span<const double>(reg.data, reg.length);
+    const auto& view = measure_views_[m];
+    if (view.data == nullptr || view.length == 0) return {};
+    return std::span<const double>(view.data, view.length);
 }
 
 void BinaryColumnStore::advise_sequential(MeasureId m) const {
-    if (m >= measure_regions_.size()) {
+    if (m >= measure_views_.size()) {
         throw std::out_of_range("advise_sequential: MeasureId out of range");
     }
-    const auto& reg = measure_regions_[m];
+    // Resident columns have nothing mapped to advise.
+    if (storage_mode_ != MeasureStorage::Mmap) return;
+    const auto& reg = measure_maps_[m];
     if (reg.base == nullptr || reg.bytes == 0) return;
     ::madvise(reg.base, reg.bytes, MADV_SEQUENTIAL);
 }
