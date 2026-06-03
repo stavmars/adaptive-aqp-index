@@ -40,6 +40,7 @@ a3i_add_test(test_query_engine test_query_engine.cpp)
 a3i_add_test(test_differential test_differential.cpp)
 a3i_add_test(test_methods test_methods.cpp)
 a3i_add_test(test_workload_gen test_workload_gen.cpp)
+a3i_add_test(test_cell_runner test_cell_runner.cpp)
 
 # Parquet front-end: the CSV/TSV -> Parquet converter and the seeded
 # synthetic generator. The per-test entries run in the fast `unit` gate; the

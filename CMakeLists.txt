@@ -45,6 +45,7 @@ add_library(a3i_core STATIC
     src/tools/synthetic_generator.cpp
     src/experiments/truth_store.cpp
     src/experiments/workload_generator.cpp
+    src/experiments/cell_runner.cpp
     src/access_path/substrate_factory.cpp
     src/substrates/kd_tree.cpp
     src/substrates/adaptive_kd_access_path.cpp
@@ -75,6 +76,11 @@ target_compile_features(a3i_core PUBLIC cxx_std_20)
 # ---- Apps ----------------------------------------------------------------
 add_executable(a3i_sanity apps/a3i_sanity.cpp)
 target_link_libraries(a3i_sanity PRIVATE a3i_core)
+
+add_executable(a3i_run apps/a3i_run.cpp)
+target_link_libraries(a3i_run PRIVATE a3i_core)
+set_target_properties(a3i_run PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/apps)
 
 add_executable(convert_parquet_to_columns tools/convert_parquet_to_columns.cpp)
 target_link_libraries(convert_parquet_to_columns PRIVATE a3i_core)
