@@ -87,7 +87,6 @@ QueryResult exact_scan(const BinaryColumnStore& store,
     metrics.substrate        = "none";
     metrics.status           = "exact";
     metrics.stop_reason      = "exact";
-    metrics.rows_examined    = static_cast<std::uint64_t>(n);
     metrics.measure_reads    = qualifying * static_cast<std::uint64_t>(k);
     metrics.target_satisfied = true;
     return result;

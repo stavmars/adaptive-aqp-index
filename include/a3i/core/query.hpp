@@ -80,7 +80,6 @@ struct QueryMetrics {
     // control flow.
     std::string   exactify_cause = "none";
     double latency_ms        = 0.0;
-    std::uint64_t rows_examined    = 0;
     std::uint64_t measure_reads    = 0;
     std::uint64_t sampled_rows     = 0;
     std::uint64_t exactified_rows  = 0;

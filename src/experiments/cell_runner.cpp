@@ -34,7 +34,7 @@ using Clock = std::chrono::steady_clock;
 constexpr const char* kHeader =
     "query_ordinal,method,substrate,dataset,workload,query_rect,aggregates,"
     "target_satisfied,status,exactify_cause,pre_exactification_error_bound,"
-    "sampling_seed,latency_ms,rows_examined,measure_reads,sampled_rows,"
+    "sampling_seed,latency_ms,measure_reads,sampled_rows,"
     "exactified_rows,partitions_touched,partitions_split,exact_contributors,"
     "reusable_strata,query_local_strata,query_local_exact_contributors,"
     "summary_reuse_hits,adaptive_rounds";
@@ -217,7 +217,7 @@ void write_row(std::ofstream& out, std::uint64_t ordinal, const std::string& met
         << (m.target_satisfied ? "true" : "false") << ',' << m.status << ','
         << m.exactify_cause << ',' << fmt(m.pre_exactification_error_bound) << ','
         << m.sampling_seed << ',' << fmt(m.latency_ms) << ','
-        << m.rows_examined << ',' << m.measure_reads << ',' << m.sampled_rows << ','
+        << m.measure_reads << ',' << m.sampled_rows << ','
         << m.exactified_rows << ',' << m.partitions_touched << ',' << m.partitions_split
         << ',' << m.exact_contributors << ',' << m.reusable_strata << ','
         << m.query_local_strata << ',' << m.query_local_exact_contributors << ','

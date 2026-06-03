@@ -203,6 +203,5 @@ TEST(ExactScan, MetricsReportFullScan) {
     EXPECT_EQ(r.metrics.method, "exact_scan");
     EXPECT_EQ(r.metrics.status, "exact");
     EXPECT_TRUE(r.metrics.target_satisfied);
-    EXPECT_EQ(r.metrics.rows_examined, f.store->row_count());
     EXPECT_EQ(r.metrics.measure_reads, 3u * 2u);  // 3 qualifying rows x 2 measures
 }
