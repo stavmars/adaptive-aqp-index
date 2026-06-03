@@ -190,11 +190,13 @@ void QueryEngine::read_round(const std::vector<std::uint64_t>& targets,
         if (p.reusable) {
             c = make_reusable_sampled_cursor(table_, p.begin, p.size, *p.tracker,
                                              delta, rng,
-                                             static_cast<StratumTag>(h));
+                                             static_cast<StratumTag>(h),
+                                             config_.sort_gather_by_row_id);
         } else {
             c = make_query_local_sampled_cursor(table_, p.begin, *p.qualifying,
                                                 *p.tracker, delta, rng,
-                                                static_cast<StratumTag>(h));
+                                                static_cast<StratumTag>(h),
+                                                config_.sort_gather_by_row_id);
         }
         new_rows[h] = c.owned.size();
         cursors.push_back(std::move(c));

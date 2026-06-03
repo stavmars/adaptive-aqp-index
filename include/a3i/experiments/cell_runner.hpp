@@ -58,6 +58,11 @@ struct CellConfig {
     std::uint32_t leaf_min_size        = 1024;
     bool          stochastic_cracking  = false;
 
+    /// Sort each round's gathered row ids ascending before reading measures
+    /// (gather locality). Recorded in the sidecar so results built under
+    /// different gather orders are never silently aggregated or compared.
+    bool          sort_gather_by_row_id = true;
+
     /// Outer repetition index; also the recorded sampling seed and the seed
     /// material that makes each run's sampling draws distinct yet reproducible.
     std::uint64_t run_id = 0;

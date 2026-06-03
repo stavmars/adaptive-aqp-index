@@ -9,18 +9,21 @@ namespace a3i {
 
 namespace {
 
-/// Look up the row id for each stratum-local position, sort ascending, and
-/// wrap in a cursor. `begin` is the partition's start in the index table.
+/// Look up the row id for each stratum-local position and wrap in a cursor,
+/// sorting ascending for gather locality unless `sort_owned` is false. `begin`
+/// is the partition's start in the index table.
 StratumCursor build_cursor(const IndexTable& table, IndexPos begin,
                            const std::vector<IndexPos>& positions,
-                           StratumTag tag) {
+                           StratumTag tag, bool sort_owned) {
     StratumCursor cursor;
     cursor.tag = tag;
     cursor.owned.reserve(positions.size());
     for (IndexPos p : positions) {
         cursor.owned.push_back(table.row_id(begin + p));
     }
-    std::sort(cursor.owned.begin(), cursor.owned.end());
+    if (sort_owned) {
+        std::sort(cursor.owned.begin(), cursor.owned.end());
+    }
     return cursor;
 }
 
@@ -39,44 +42,45 @@ struct CursorGreater {
 StratumCursor make_reusable_full_cursor(const IndexTable& table, IndexPos begin,
                                         std::uint64_t size,
                                         SampleTracker& tracker,
-                                        StratumTag tag) {
+                                        StratumTag tag, bool sort_owned) {
     std::vector<IndexPos> positions;
     positions.reserve(static_cast<std::size_t>(size));
     for (std::uint64_t p = 0; p < size; ++p) {
         positions.push_back(static_cast<IndexPos>(p));
     }
     mark_all(tracker, positions);
-    return build_cursor(table, begin, positions, tag);
+    return build_cursor(table, begin, positions, tag, sort_owned);
 }
 
 StratumCursor make_reusable_sampled_cursor(const IndexTable& table,
                                            IndexPos begin, std::uint64_t size,
                                            SampleTracker& tracker,
                                            std::uint64_t count, Rng& rng,
-                                           StratumTag tag) {
+                                           StratumTag tag, bool sort_owned) {
     std::vector<IndexPos> positions =
         Sampler::draw({size, /*qualifying=*/nullptr}, tracker, count, rng);
     mark_all(tracker, positions);
-    return build_cursor(table, begin, positions, tag);
+    return build_cursor(table, begin, positions, tag, sort_owned);
 }
 
 StratumCursor make_query_local_full_cursor(const IndexTable& table,
                                            IndexPos begin,
                                            const PositionBitset& qualifying,
                                            SampleTracker& tracker,
-                                           StratumTag tag) {
+                                           StratumTag tag, bool sort_owned) {
     std::vector<IndexPos> positions = qualifying.to_positions();
     mark_all(tracker, positions);
-    return build_cursor(table, begin, positions, tag);
+    return build_cursor(table, begin, positions, tag, sort_owned);
 }
 
 StratumCursor make_query_local_sampled_cursor(
     const IndexTable& table, IndexPos begin, const PositionBitset& qualifying,
-    SampleTracker& tracker, std::uint64_t count, Rng& rng, StratumTag tag) {
+    SampleTracker& tracker, std::uint64_t count, Rng& rng, StratumTag tag,
+    bool sort_owned) {
     std::vector<IndexPos> positions =
         Sampler::draw({qualifying.size(), &qualifying}, tracker, count, rng);
     mark_all(tracker, positions);
-    return build_cursor(table, begin, positions, tag);
+    return build_cursor(table, begin, positions, tag, sort_owned);
 }
 
 KWayMerge::KWayMerge(std::span<StratumCursor> cursors) {

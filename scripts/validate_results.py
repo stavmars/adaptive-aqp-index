@@ -82,7 +82,7 @@ EXACT_VALUED_STATUS = {"exact", "exactified"}
 # recorded in the engine-written sidecar, so it is not among these.)
 REQUIRED_RUNMETA_STAMPS = ("engine_build_version", "cold", "run_id",
                            "sampling_seed", "confidence", "num_measures",
-                           "max_queries")
+                           "max_queries", "sort_gather_by_row_id")
 
 
 # --- Student-t one-sided critical value (pure stdlib) ------------------------
@@ -405,6 +405,7 @@ def validate_run(csv_path: Path, oracles: dict[int, Oracle],
         "workload": csv_path.parents[2].name,
         "method": method, "substrate": substrate,
         "num_measures": runmeta.get("num_measures"),
+        "sort_gather_by_row_id": runmeta.get("sort_gather_by_row_id"),
         "error_bound": eb, "confidence": conf, "run_id": runmeta.get("run_id"),
         "exact_checked": n_exact, "exact_failed": n_exact_fail,
         "approx_checked": n_approx,
@@ -493,11 +494,13 @@ def _interval_brackets(est: float, lo: float, hi: float) -> bool:
 # --- output ------------------------------------------------------------------
 
 SUMMARY_COLS = ["dataset", "workload", "method", "substrate", "num_measures",
+                "sort_gather_by_row_id",
                 "error_bound", "confidence", "run_id", "exact_checked",
                 "exact_failed", "approx_checked", "approx_within_eb_frac",
                 "coverage_frac", "max_rel_err", "guard_failed",
                 "init_ms", "query_ms_total", "cumulative_ms", "status"]
 COVERAGE_COLS = ["dataset", "workload", "method", "substrate", "num_measures",
+                 "sort_gather_by_row_id",
                  "error_bound", "confidence", "aggregate", "measure", "n_runs",
                  "mean_coverage", "coverage_upper", "coverage_status",
                  "zero_coverage_positions", "basis"]
@@ -559,6 +562,16 @@ def main() -> int:
             cells[cell_key_of(csv_path)].append(csv_path)
 
         for _, paths in sorted(cells.items()):
+            # Replicate runs are pooled for the coverage judgement, so they must
+            # share the gather order: results built sorted and unsorted measure
+            # different code paths and must never be combined. A mixed cell is a
+            # collection error, not a statistical one, so fail hard.
+            gather_orders = {bool(runmeta_for(p).get("sort_gather_by_row_id"))
+                             for p in paths}
+            if len(gather_orders) > 1:
+                sys.exit(f"cell {paths[0].parent} mixes sort_gather_by_row_id "
+                         f"across replicate runs ({sorted(gather_orders)}); "
+                         f"these results cannot be pooled")
             per_run_ma: list[dict[tuple[str, str], list[int]]] = []
             positions: dict[tuple[str, str], dict[int, list[bool]]] = defaultdict(
                 lambda: defaultdict(list))
@@ -599,6 +612,7 @@ def main() -> int:
                     "dataset": dataset, "workload": workload,
                     "method": cell_meta["method"], "substrate": cell_meta["substrate"],
                     "num_measures": cell_meta["num_measures"],
+                    "sort_gather_by_row_id": cell_meta["sort_gather_by_row_id"],
                     "error_bound": cell_meta["error_bound"], "confidence": nominal,
                     "measure": ma[0], "aggregate": ma[1], **judged})
                 if judged["coverage_status"] == "low":

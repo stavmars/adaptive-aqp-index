@@ -44,6 +44,14 @@ struct EngineConfig {
     enum class AccuracyMode { PerQuery, ForceExact };
     AccuracyMode accuracy_mode = AccuracyMode::PerQuery;
     bool         persist_summaries = false;
+    // Sort each round's gathered row ids ascending before reading the measure
+    // columns. The columns are stored by original row id and never permuted, so
+    // ascending order caps every page at one fault under eviction and turns the
+    // device offset stream monotonic -- a win when a column does not fit in RAM
+    // and on rotational media. It costs a per-round sort that buys little when
+    // the column is resident and the read is sparse. A global toggle, not a
+    // per-query heuristic.
+    bool         sort_gather_by_row_id = true;
     AllocatorConfig allocator;
 };
 

@@ -22,8 +22,8 @@ void print_usage(std::ostream& os) {
 "               [--dataset <id>] [--workload-name <id>]\n"
 "               [--num-measures <k>] [--error-bound <eps>] [--confidence <c>]\n"
 "               [--refinement-threshold <N>] [--leaf-min-size <N>]\n"
-"               [--stochastic-cracking] [--run-id <R>] [--max-queries <N>]\n"
-"               [--cold true|false]\n"
+"               [--stochastic-cracking] [--no-sort-gather] [--run-id <R>]\n"
+"               [--max-queries <N>] [--cold true|false]\n"
 "\n"
 "Methods:\n"
 "  scan           exact-scan oracle (no substrate)\n"
@@ -117,6 +117,7 @@ int main(int argc, char** argv) try {
         if (eat_kv(i, argc, argv, "--max-queries", val))          { maxq_str = val; continue; }
         if (eat_kv(i, argc, argv, "--cold", val))                 { cold_str = val; continue; }
         if (eat_flag(i, argc, argv, "--stochastic-cracking"))     { cfg.stochastic_cracking = true; continue; }
+        if (eat_flag(i, argc, argv, "--no-sort-gather"))          { cfg.sort_gather_by_row_id = false; continue; }
         throw std::runtime_error("unrecognized argument: " + std::string(argv[i]));
     }
 

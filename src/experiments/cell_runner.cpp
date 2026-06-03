@@ -307,8 +307,10 @@ CellReport run_cell(const CellConfig& config) {
         scfg.leaf_min_size        = config.leaf_min_size;
         substrate = SubstrateFactory::instance().create(spec.substrate_id, scfg);
         substrate->prepare(table);
+        EngineConfig ecfg = behavior_config(spec.behavior);
+        ecfg.sort_gather_by_row_id = config.sort_gather_by_row_id;
         engine = std::make_unique<QueryEngine>(store, table, *substrate,
-                                               behavior_config(spec.behavior));
+                                               std::move(ecfg));
         // Build (and, for aggregating behaviors, precompute summaries) up front
         // so the cost is not folded into the first query's latency.
         const auto t0 = Clock::now();
@@ -358,6 +360,7 @@ CellReport run_cell(const CellConfig& config) {
         meta["refinement_threshold"] = config.refinement_threshold;
         meta["leaf_min_size"]        = config.leaf_min_size;
         meta["stochastic_cracking"]  = config.stochastic_cracking;
+        meta["sort_gather_by_row_id"] = config.sort_gather_by_row_id;
         meta["run_id"]               = config.run_id;
         meta["sampling_seed"]        = config.run_id;
         meta["max_queries"]          = config.max_queries;

@@ -175,6 +175,29 @@ TEST(QueryEngine, ForceExactReproducesOracle) {
     EXPECT_EQ(got.metrics.exactify_cause, "none");
 }
 
+// The gather order is a read-locality knob: turning it off changes the order
+// rows are read and folded, never the answer. Both settings must reproduce the
+// oracle.
+TEST(QueryEngine, GatherOrderDoesNotChangeExactAnswer) {
+    Fixture f;
+    const RangeQuery q = query(2.0, 12.0, 3.0, 17.0, /*rel=*/0.05);
+    const QueryResult oracle = exact_scan(*f.store, f.schema, q);
+
+    for (bool sort_gather : {true, false}) {
+        IndexTable table = f.make_table();
+        AdaptiveKdAccessPath path(f.substrate());
+        path.prepare(table);
+
+        EngineConfig cfg;
+        cfg.accuracy_mode = EngineConfig::AccuracyMode::ForceExact;
+        cfg.sort_gather_by_row_id = sort_gather;
+        QueryEngine engine(*f.store, table, path, cfg);
+
+        const QueryResult got = engine.execute(q, /*ordinal=*/1);
+        expect_matches_oracle(got, oracle);
+    }
+}
+
 TEST(QueryEngine, SelectedMeasureSubsetServesOnlyThoseMeasures) {
     Fixture f;
     const RangeQuery q = query(2.0, 12.0, 3.0, 17.0, /*rel=*/0.05);

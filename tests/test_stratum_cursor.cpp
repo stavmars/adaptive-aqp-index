@@ -54,6 +54,22 @@ TEST(StratumCursor, ReusableFullSortsAndMarksTracker) {
     for (IndexPos p = 0; p < 5; ++p) EXPECT_TRUE(tracker.contains(p));
 }
 
+// Disabling the gather sort leaves the row ids in position order rather than
+// ascending, but reads exactly the same set -- the sort is a locality knob, not
+// a correctness one.
+TEST(StratumCursor, SortOwnedFalsePreservesPositionOrderSameSet) {
+    const IndexTable table = make_table();
+    SampleTracker tracker(5);
+    StratumCursor cur = make_reusable_full_cursor(
+        table, /*begin=*/0, /*size=*/5, tracker, 7, /*sort_owned=*/false);
+
+    // Position order of partition A row ids: {50, 10, 30, 20, 40}.
+    EXPECT_EQ(cur.owned, (std::vector<RowId>{50, 10, 30, 20, 40}));
+    EXPECT_FALSE(std::is_sorted(cur.owned.begin(), cur.owned.end()));
+    std::set<RowId> got(cur.owned.begin(), cur.owned.end());
+    EXPECT_EQ(got, (std::set<RowId>{10, 20, 30, 40, 50}));
+}
+
 TEST(StratumCursor, SampledMarksTrackerAndSorts) {
     const IndexTable table = make_table();
     SampleTracker tracker(5);

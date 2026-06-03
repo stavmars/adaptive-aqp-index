@@ -41,7 +41,8 @@
 namespace a3i {
 
 struct StratumCursor {
-    std::vector<RowId> owned;     // sorted ascending; built at construction
+    std::vector<RowId> owned;     // row ids to read; ascending unless gather
+                                  // ordering is disabled at construction
     std::size_t        pos = 0;   // walk position into owned
     StratumTag         tag = 0;   // routes gathered values to accumulators
 
@@ -50,11 +51,15 @@ struct StratumCursor {
     bool  done() const { return pos == owned.size(); }
 };
 
+/// `sort_owned` controls whether the cursor's row ids are sorted ascending at
+/// construction (gather locality); see EngineConfig::sort_gather_by_row_id.
+
 /// Reusable stratum, full read: reads all of [0, size) and marks every
 /// position in the persistent tracker.
 StratumCursor make_reusable_full_cursor(const IndexTable& table, IndexPos begin,
                                         std::uint64_t size,
-                                        SampleTracker& tracker, StratumTag tag);
+                                        SampleTracker& tracker, StratumTag tag,
+                                        bool sort_owned = true);
 
 /// Reusable stratum, sampled read: draws `count` new positions without
 /// replacement from [0, size) \ tracker, marks them in the tracker.
@@ -62,7 +67,8 @@ StratumCursor make_reusable_sampled_cursor(const IndexTable& table,
                                            IndexPos begin, std::uint64_t size,
                                            SampleTracker& tracker,
                                            std::uint64_t count, Rng& rng,
-                                           StratumTag tag);
+                                           StratumTag tag,
+                                           bool sort_owned = true);
 
 /// Query-local stratum, full read: reads every qualifying position and marks
 /// each in the query-local tracker. Qualifying positions are partition-local
@@ -71,27 +77,33 @@ StratumCursor make_query_local_full_cursor(const IndexTable& table,
                                            IndexPos begin,
                                            const PositionBitset& qualifying,
                                            SampleTracker& tracker,
-                                           StratumTag tag);
+                                           StratumTag tag,
+                                           bool sort_owned = true);
 
 /// Query-local stratum, sampled read: draws `count` new positions without
 /// replacement from the qualifying set minus the tracker, marks them in the
 /// tracker.
 StratumCursor make_query_local_sampled_cursor(
     const IndexTable& table, IndexPos begin, const PositionBitset& qualifying,
-    SampleTracker& tracker, std::uint64_t count, Rng& rng, StratumTag tag);
+    SampleTracker& tracker, std::uint64_t count, Rng& rng, StratumTag tag,
+    bool sort_owned = true);
 
-/// Min-heap k-way merge over cursors, yielding row ids in ascending order with
-/// the originating stratum tag alongside each id. Cursors are referenced by
-/// pointer and must outlive the merge; done cursors are dropped.
+/// Min-heap k-way merge over cursors, interleaving their row ids by current
+/// head with the originating stratum tag alongside each id. When every cursor
+/// was built sorted the merged stream is globally ascending; with sorting
+/// disabled the stream is an arbitrary interleaving, which the gather and
+/// moment accumulation handle identically. Cursors are referenced by pointer
+/// and must outlive the merge; done cursors are dropped.
 class KWayMerge {
 public:
     explicit KWayMerge(std::span<StratumCursor> cursors);
 
     bool empty() const noexcept { return heap_.empty(); }
 
-    /// Pop up to ids_out.size() row ids in ascending order into ids_out, with
-    /// the matching tags in tags_out. Returns the number popped. ids_out and
-    /// tags_out must have equal length.
+    /// Pop up to ids_out.size() row ids into ids_out, with the matching tags in
+    /// tags_out. The order matches the merge (ascending iff the cursors were
+    /// built sorted). Returns the number popped. ids_out and tags_out must have
+    /// equal length.
     std::size_t next_chunk(std::span<RowId> ids_out,
                            std::span<StratumTag> tags_out);
 
