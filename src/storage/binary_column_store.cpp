@@ -172,6 +172,24 @@ void BinaryColumnStore::gather(MeasureId m,
     }
 }
 
+std::span<const double> BinaryColumnStore::measure_column(MeasureId m) const {
+    if (m >= measure_regions_.size()) {
+        throw std::out_of_range("measure_column: MeasureId out of range");
+    }
+    const auto& reg = measure_regions_[m];
+    if (reg.data == nullptr || reg.length == 0) return {};
+    return std::span<const double>(reg.data, reg.length);
+}
+
+void BinaryColumnStore::advise_sequential(MeasureId m) const {
+    if (m >= measure_regions_.size()) {
+        throw std::out_of_range("advise_sequential: MeasureId out of range");
+    }
+    const auto& reg = measure_regions_[m];
+    if (reg.base == nullptr || reg.bytes == 0) return;
+    ::madvise(reg.base, reg.bytes, MADV_SEQUENTIAL);
+}
+
 const GlobalMeasureStats& BinaryColumnStore::global_stats(MeasureId m) const {
     if (m >= exposed_measures_.size()) {
         throw std::out_of_range("global_stats: MeasureId out of range");

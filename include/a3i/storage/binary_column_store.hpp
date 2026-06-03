@@ -67,6 +67,17 @@ public:
                 std::span<const RowId> row_ids,
                 std::span<double> out) const;
 
+    /// Whole memory-mapped measure column as a contiguous span. Reading an
+    /// element faults its page in on first touch. Intended for one-shot
+    /// front-to-back sweeps that want to avoid the per-element bounds checks of
+    /// `measure_value`/`gather`. Empty if the column is unmapped (zero rows).
+    std::span<const double> measure_column(MeasureId m) const;
+
+    /// Read-ahead hint for a full front-to-back scan of measure `m`'s column
+    /// (kernel `MADV_SEQUENTIAL`): pages may be dropped behind the read cursor,
+    /// so use it only for a dense one-pass sweep, never for sampling.
+    void advise_sequential(MeasureId m) const;
+
     /// Per-measure stats from the manifest (no scan).
     const GlobalMeasureStats& global_stats(MeasureId m) const;
 
