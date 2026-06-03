@@ -23,7 +23,7 @@ std::vector<PartitionId> KdTree::roots() const {
 }
 
 std::vector<PartitionId> KdTree::children(PartitionId id) const {
-    const Node& node = nodes_.at(id);
+    const Node& node = nodes_[id];
     if (node.leaf) return {};
     std::vector<PartitionId> out;
     if (node.left)  out.push_back(*node.left);
@@ -31,10 +31,10 @@ std::vector<PartitionId> KdTree::children(PartitionId id) const {
     return out;
 }
 
-bool KdTree::is_leaf(PartitionId id) const { return nodes_.at(id).leaf; }
+bool KdTree::is_leaf(PartitionId id) const { return nodes_[id].leaf; }
 
 Containment KdTree::classify(PartitionId id, const HyperRect& q) const {
-    const Node& node = nodes_.at(id);
+    const Node& node = nodes_[id];
     if (!node.bounds.intersects(q)) return Containment::Disjoint;
     if (q.contains_rect(node.bounds)) return Containment::Contained;
     return Containment::Partial;
