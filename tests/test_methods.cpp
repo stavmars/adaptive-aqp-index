@@ -156,8 +156,8 @@ void expect_agree(const QueryResult& a, const QueryResult& b) {
 
 }  // namespace
 
-// The four presets map to the two-flag behavior identity, and the run id joins
-// the substrate with the behavior suffix.
+// The four presets map to the two-flag behavior identity, and approximation is
+// a property of the behavior alone.
 TEST(Methods, PresetsAndNaming) {
     using AM = EngineConfig::AccuracyMode;
 
@@ -173,10 +173,10 @@ TEST(Methods, PresetsAndNaming) {
     EXPECT_EQ(behavior_config(Behavior::A3i).accuracy_mode, AM::PerQuery);
     EXPECT_TRUE(behavior_config(Behavior::A3i).persist_summaries);
 
-    EXPECT_EQ(run_id("adkd", Behavior::Plain), "adkd");
-    EXPECT_EQ(run_id("adkd", Behavior::Agg), "adkd_agg");
-    EXPECT_EQ(run_id("adkd", Behavior::Sampling), "adkd_sampling");
-    EXPECT_EQ(run_id("adkd", Behavior::A3i), "adkd_a3i");
+    EXPECT_FALSE(behavior_is_approx(Behavior::Plain));
+    EXPECT_FALSE(behavior_is_approx(Behavior::Agg));
+    EXPECT_TRUE(behavior_is_approx(Behavior::Sampling));
+    EXPECT_TRUE(behavior_is_approx(Behavior::A3i));
 }
 
 // The substrate, not the behavior, decides whether the structure may be cracked

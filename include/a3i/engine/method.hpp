@@ -22,9 +22,10 @@ enum class Behavior { Plain, Agg, Sampling, A3i };
 /// sampling behaviors and is ignored by the exact ones.
 EngineConfig behavior_config(Behavior behavior, AllocatorConfig allocator = {});
 
-/// The run id: the substrate id with the behavior appended (the plain behavior
-/// is just the bare substrate id). e.g. ("adkd", Behavior::Agg) -> "adkd_agg".
-std::string run_id(const std::string& substrate_id, Behavior behavior);
+/// Whether a behavior produces approximate (interval) answers and therefore
+/// consumes the per-query error bound. `Plain`/`Agg` are exact; `Sampling`/`A3i`
+/// are approximate. This is the single definition of that property.
+bool behavior_is_approx(Behavior behavior);
 
 /// A behavior composed with a substrate, with the two substrate-derived flags
 /// filled in. The flags are computed here, never hand-set, so a combination

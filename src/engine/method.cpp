@@ -27,14 +27,14 @@ EngineConfig behavior_config(Behavior behavior, AllocatorConfig allocator) {
     return cfg;
 }
 
-std::string run_id(const std::string& substrate_id, Behavior behavior) {
+bool behavior_is_approx(Behavior behavior) {
     switch (behavior) {
-        case Behavior::Plain:    return substrate_id;
-        case Behavior::Agg:      return substrate_id + "_agg";
-        case Behavior::Sampling: return substrate_id + "_sampling";
-        case Behavior::A3i:      return substrate_id + "_a3i";
+        case Behavior::Plain:
+        case Behavior::Agg:      return false;
+        case Behavior::Sampling:
+        case Behavior::A3i:      return true;
     }
-    return substrate_id;
+    return false;
 }
 
 ResolvedRunConfig ResolvedRunConfig::resolve(EngineConfig behavior,
