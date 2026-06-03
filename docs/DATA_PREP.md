@@ -72,7 +72,7 @@ columns, and optional `null_string` / `drop_if`.
 | dataset | source | dims | measures |
 | --- | --- | --- | --- |
 | `synth10_1M` … `synth10_1B` | generator (seed 0; rows 1M…1B) | `col0,col1` | `col2…col9` (uniform[0,1000]) |
-| `taxi` | parquet (real) | `pickup_lon,pickup_lat` | `fare_amount,total_amount,trip_distance,passenger_count` |
+| `taxi` | parquet (real) | `pickup_longitude,pickup_latitude` | `fare_amount,total_amount,trip_distance,passenger_count` |
 | `gaia_dr3` | parquet (real) | `ra,dec` | `parallax,phot_g_mean_mag,pmra,pmdec,phot_bp_mean_mag,phot_rp_mean_mag,ruwe,astrometric_excess_noise` |
 | `ebird_us` | parquet (real) | `LONGITUDE,LATITUDE` | `DURATION MINUTES,EFFORT DISTANCE KM,NUMBER OBSERVERS,OBSERVATION COUNT` |
 

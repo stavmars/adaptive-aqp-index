@@ -1,0 +1,7 @@
+# Headline result: the method ladder on each (dataset, workload), single
+# measure, one error bound. The cumulative-time-vs-query curve and the
+# adkd -> adkd_agg (reuse) and adkd_agg -> a3i (sampling) arrows are read off
+# these cells. Everything else inherits from _defaults.yaml.
+plan_id: headline
+nm: [4]
+eb: [0.01]

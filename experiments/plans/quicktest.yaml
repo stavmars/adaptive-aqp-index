@@ -1,0 +1,9 @@
+# Fast test plan for quick iteration during development
+plan_id: quicktest
+runs: [scan, kd, kd_agg, adkd, adkd_agg, adkd_sampling, a3i]
+workloads:
+  - synth10_100M_clustered
+nm: [1]
+eb: [0.01]
+run_id: [0]
+max_queries: 100

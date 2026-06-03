@@ -1,0 +1,18 @@
+# Query-workload scenarios for the ebird_us dataset (heavy-tail measures).
+workloads:
+  - workload_id: ebird_us_random
+    dataset_id: ebird_us
+    family: uniform_random
+    extent_mode: calibrated
+    selectivity: 0.01
+    seed: 0
+    count: 500
+
+  - workload_id: ebird_us_clustered
+    dataset_id: ebird_us
+    family: clustered
+    extent_mode: calibrated
+    selectivity: 0.01
+    focus: [-74.95, 38.95]   # Cape May
+    seed: 0
+    count: 500

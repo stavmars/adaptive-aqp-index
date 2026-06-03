@@ -1,0 +1,35 @@
+# Central per-axis defaults that every plan inherits. A plan states only the
+# axes it changes; all unstated axes come from here, and the cell set is the
+# legality-pruned Cartesian product of {plan-stated values} over {defaults}.
+#
+# Axes:
+#   runs        behavior x substrate composition (the method names a3i_run takes)
+#   workloads   workload ids from configs/workloads/*.yaml (selectivity is in the id)
+#   nm          number of measures served (first-k of the schema order); values
+#               exceeding a dataset's measure count are pruned per dataset
+#   eb          error bound; applied to APPROXIMATE runs only (a3i, adkd_sampling)
+#   str         refinement threshold
+#   mem         memory setting per run (unbounded, or a cap like 16GiB)
+#   run_id      outer repetition index
+#   max_queries cap on queries replayed (null = full sequence)
+#   confidence  CI confidence level (applies to approximate runs)
+
+runs: [scan, kd, kd_agg, adkd, adkd_agg, adkd_sampling, a3i]
+
+workloads:
+  - taxi_random
+  - taxi_clustered
+  - gaia_dr3_random
+  - gaia_dr3_clustered
+  - ebird_us_random
+  - ebird_us_clustered
+  - synth10_300M_random
+  - synth10_300M_clustered
+
+nm: [4]
+eb: [0.01]
+str: [1024]
+mem: [unbounded]
+run_id: [0]
+max_queries: null
+confidence: 0.95

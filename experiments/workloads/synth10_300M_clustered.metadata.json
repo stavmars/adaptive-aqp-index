@@ -1,0 +1,25 @@
+{
+  "count": 500,
+  "dataset_id": "synth10_300M",
+  "dimensions": 2,
+  "domain_bounds": {
+    "high": [
+      1000.0,
+      1000.0
+    ],
+    "low": [
+      0.0,
+      0.0
+    ]
+  },
+  "extent_mode": "closed_form",
+  "family": "clustered",
+  "fingerprint": 9053972063393389088,
+  "focus": [
+    500.0,
+    500.0
+  ],
+  "name": "synth10_300M_clustered",
+  "seed": 0,
+  "selectivity": 0.01
+}

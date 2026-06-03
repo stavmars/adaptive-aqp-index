@@ -1,0 +1,15 @@
+# Selectivity sweep: the synth10_300M closed-form workloads across selectivities
+# (selectivity is part of the workload id), at two measure counts. Identifies
+# the break-even point against full-scan as queries grow.
+plan_id: selectivity_sweep
+workloads:
+  - synth10_300M_random_sel0.0001
+  - synth10_300M_random_sel0.001
+  - synth10_300M_random
+  - synth10_300M_random_sel0.05
+  - synth10_300M_random_sel0.1
+  - synth10_300M_clustered_sel0.0001
+  - synth10_300M_clustered_sel0.001
+  - synth10_300M_clustered
+  - synth10_300M_clustered_sel0.05
+  - synth10_300M_clustered_sel0.1

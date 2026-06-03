@@ -1,0 +1,18 @@
+# Query-workload scenarios for the taxi dataset.
+workloads:
+  - workload_id: taxi_random
+    dataset_id: taxi
+    family: uniform_random
+    extent_mode: calibrated
+    selectivity: 0.01
+    seed: 0
+    count: 500
+
+  - workload_id: taxi_clustered
+    dataset_id: taxi
+    family: clustered
+    extent_mode: calibrated
+    selectivity: 0.01
+    focus: [-73.985, 40.758] # Times Square
+    seed: 0
+    count: 500

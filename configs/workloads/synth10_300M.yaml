@@ -1,0 +1,30 @@
+# Query-workload scenarios for synth10_300M (the uniform closed-form dataset
+# used for the selectivity sweep). Selectivity is part of the workload id:
+# the 0.01 default carries no suffix, the others carry _sel<value>.
+workloads:
+  # selectivity = 0.01 (default; no suffix)
+  - workload_id: synth10_300M_random
+    dataset_id: synth10_300M
+    family: uniform_random
+    extent_mode: closed_form
+    selectivity: 0.01
+    seed: 0
+    count: 500
+  - workload_id: synth10_300M_clustered
+    dataset_id: synth10_300M
+    family: clustered
+    extent_mode: closed_form
+    selectivity: 0.01
+    focus: [500, 500]
+    seed: 0
+    count: 500
+
+  # selectivity sweep variants
+  - {workload_id: synth10_300M_random_sel0.0001, dataset_id: synth10_300M, family: uniform_random, extent_mode: closed_form, selectivity: 0.0001, seed: 0, count: 500}
+  - {workload_id: synth10_300M_random_sel0.001,  dataset_id: synth10_300M, family: uniform_random, extent_mode: closed_form, selectivity: 0.001,  seed: 0, count: 500}
+  - {workload_id: synth10_300M_random_sel0.05,   dataset_id: synth10_300M, family: uniform_random, extent_mode: closed_form, selectivity: 0.05,   seed: 0, count: 500}
+  - {workload_id: synth10_300M_random_sel0.1,    dataset_id: synth10_300M, family: uniform_random, extent_mode: closed_form, selectivity: 0.10,   seed: 0, count: 500}
+  - {workload_id: synth10_300M_clustered_sel0.0001, dataset_id: synth10_300M, family: clustered, extent_mode: closed_form, selectivity: 0.0001, focus: [500, 500], seed: 0, count: 500}
+  - {workload_id: synth10_300M_clustered_sel0.001,  dataset_id: synth10_300M, family: clustered, extent_mode: closed_form, selectivity: 0.001,  focus: [500, 500], seed: 0, count: 500}
+  - {workload_id: synth10_300M_clustered_sel0.05,   dataset_id: synth10_300M, family: clustered, extent_mode: closed_form, selectivity: 0.05,   focus: [500, 500], seed: 0, count: 500}
+  - {workload_id: synth10_300M_clustered_sel0.1,    dataset_id: synth10_300M, family: clustered, extent_mode: closed_form, selectivity: 0.10,   focus: [500, 500], seed: 0, count: 500}

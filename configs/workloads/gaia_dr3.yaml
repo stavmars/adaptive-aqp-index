@@ -1,0 +1,18 @@
+# Query-workload scenarios for the gaia_dr3 dataset.
+workloads:
+  - workload_id: gaia_dr3_random
+    dataset_id: gaia_dr3
+    family: uniform_random
+    extent_mode: calibrated
+    selectivity: 0.01
+    seed: 0
+    count: 500
+
+  - workload_id: gaia_dr3_clustered
+    dataset_id: gaia_dr3
+    family: clustered
+    extent_mode: calibrated
+    selectivity: 0.01
+    focus: [266.4, -29.0]   # Galactic centre (Sgr A*)
+    seed: 0
+    count: 500

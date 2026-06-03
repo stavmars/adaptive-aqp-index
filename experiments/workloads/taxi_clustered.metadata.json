@@ -1,0 +1,28 @@
+{
+  "achieved_selectivity_mean": 0.009987640380859374,
+  "count": 500,
+  "dataset_id": "taxi",
+  "dimensions": 2,
+  "domain_bounds": {
+    "high": [
+      -73.842545,
+      40.839788
+    ],
+    "low": [
+      -74.106216,
+      40.676993
+    ]
+  },
+  "extent_mode": "calibrated",
+  "family": "clustered",
+  "fingerprint": 5553853412215900890,
+  "focus": [
+    -73.985,
+    40.758
+  ],
+  "name": "taxi_clustered",
+  "reservoir_rows": 65536,
+  "reservoir_seed": 0,
+  "seed": 0,
+  "selectivity": 0.01
+}

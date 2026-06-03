@@ -1,0 +1,11 @@
+# Scalability sweep: clustered workloads across the synth10 cardinalities.
+# Isolates how initialization (query-0 build) and per-query cost scale with N.
+plan_id: scalability_sweep
+workloads:
+  - synth10_1M_clustered
+  - synth10_50M_clustered
+  - synth10_100M_clustered
+  - synth10_300M_clustered
+  - synth10_500M_clustered
+  - synth10_1B_clustered
+

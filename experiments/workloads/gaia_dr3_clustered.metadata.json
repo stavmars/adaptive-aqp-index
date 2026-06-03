@@ -1,0 +1,28 @@
+{
+  "achieved_selectivity_mean": 0.009904449462890624,
+  "count": 500,
+  "dataset_id": "gaia_dr3",
+  "dimensions": 2,
+  "domain_bounds": {
+    "high": [
+      360.0,
+      90.0
+    ],
+    "low": [
+      0.0,
+      -90.0
+    ]
+  },
+  "extent_mode": "calibrated",
+  "family": "clustered",
+  "fingerprint": 11098214365748373517,
+  "focus": [
+    266.4,
+    -29.0
+  ],
+  "name": "gaia_dr3_clustered",
+  "reservoir_rows": 65536,
+  "reservoir_seed": 0,
+  "seed": 0,
+  "selectivity": 0.01
+}

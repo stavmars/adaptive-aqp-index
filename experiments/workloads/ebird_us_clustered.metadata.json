@@ -1,0 +1,28 @@
+{
+  "achieved_selectivity_mean": 0.0099718017578125,
+  "count": 500,
+  "dataset_id": "ebird_us",
+  "dimensions": 2,
+  "domain_bounds": {
+    "high": [
+      -66.24,
+      49.36
+    ],
+    "low": [
+      -125.96,
+      24.03
+    ]
+  },
+  "extent_mode": "calibrated",
+  "family": "clustered",
+  "fingerprint": 11741597826096675510,
+  "focus": [
+    -74.95,
+    38.95
+  ],
+  "name": "ebird_us_clustered",
+  "reservoir_rows": 65536,
+  "reservoir_seed": 0,
+  "seed": 0,
+  "selectivity": 0.01
+}

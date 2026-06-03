@@ -1,0 +1,9 @@
+# Clustered workloads across the synth10 cardinalities, for the scalability
+# sweep (init + per-query cost vs N). One clustered scenario per size, all at
+# the 1% default selectivity, closed-form sized.
+workloads:
+  - {workload_id: synth10_1M_clustered,   dataset_id: synth10_1M,   family: clustered, extent_mode: closed_form, selectivity: 0.01, focus: [500, 500], seed: 0, count: 500}
+  - {workload_id: synth10_50M_clustered,  dataset_id: synth10_50M,  family: clustered, extent_mode: closed_form, selectivity: 0.01, focus: [500, 500], seed: 0, count: 500}
+  - {workload_id: synth10_100M_clustered, dataset_id: synth10_100M, family: clustered, extent_mode: closed_form, selectivity: 0.01, focus: [500, 500], seed: 0, count: 500}
+  - {workload_id: synth10_500M_clustered, dataset_id: synth10_500M, family: clustered, extent_mode: closed_form, selectivity: 0.01, focus: [500, 500], seed: 0, count: 500}
+  - {workload_id: synth10_1B_clustered,   dataset_id: synth10_1B,   family: clustered, extent_mode: closed_form, selectivity: 0.01, focus: [500, 500], seed: 0, count: 500}
