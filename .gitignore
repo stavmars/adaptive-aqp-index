@@ -21,6 +21,9 @@ compile_commands.json
 # Truth and large CSVs are regenerated (keep tiny fixtures under tests/)
 /experiments/truth/
 
+# Local environment (machine-specific paths; copy from .env.example)
+/.env
+
 # Python
 .venv/
 __pycache__/

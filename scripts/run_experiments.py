@@ -54,6 +54,8 @@ try:
 except ImportError:  # pragma: no cover - dependency hint
     sys.exit("PyYAML is required: pip install pyyaml")
 
+import a3i_config  # loads .env and resolves the shared roots (flag > env > .env > default)
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLANS_DIR = REPO_ROOT / "experiments" / "plans"
 WORKLOAD_CONFIG_DIR = REPO_ROOT / "configs" / "workloads"
@@ -417,7 +419,7 @@ def main() -> int:
                     help="plan directory (default: experiments/plans)")
     ap.add_argument("--workload-config-dir", default=None,
                     help="workload catalog directory (default: configs/workloads)")
-    ap.add_argument("--prepared-root", default=os.environ.get("A3I_PREPARED_ROOT"),
+    ap.add_argument("--prepared-root", default=None,
                     help="prepared-dataset root (default: data/prepared)")
     ap.add_argument("--results-root", default=None,
                     help="output root (default: experiments/results)")
@@ -444,9 +446,9 @@ def main() -> int:
                          "systemd scope with MemoryMax)")
     args = ap.parse_args()
 
-    prepared_root = Path(args.prepared_root) if args.prepared_root else REPO_ROOT / "data" / "prepared"
-    results_root = Path(args.results_root) if args.results_root else REPO_ROOT / "experiments" / "results"
-    workloads_dir = Path(args.workloads_dir) if args.workloads_dir else REPO_ROOT / "experiments" / "workloads"
+    prepared_root = a3i_config.prepared_root(args.prepared_root)
+    results_root  = a3i_config.results_root(args.results_root)
+    workloads_dir = a3i_config.workloads_dir(args.workloads_dir)
     workloads_dir.mkdir(parents=True, exist_ok=True)
     results_root.mkdir(parents=True, exist_ok=True)
 

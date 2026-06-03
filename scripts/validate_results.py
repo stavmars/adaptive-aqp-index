@@ -60,6 +60,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+import a3i_config
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 EXACT_TO_BIT = {"COUNT", "COUNT_STAR"}   # integer counts must match exactly
@@ -534,7 +536,7 @@ def main() -> int:
                          "instead of a warning")
     args = ap.parse_args()
 
-    results_root = Path(args.results_root) if args.results_root else REPO_ROOT / "experiments" / "results"
+    results_root = a3i_config.results_root(args.results_root)
     validation_root = Path(args.validation_root) if args.validation_root else REPO_ROOT / "experiments" / "validation"
 
     pairs = discover_dataset_workloads(results_root)

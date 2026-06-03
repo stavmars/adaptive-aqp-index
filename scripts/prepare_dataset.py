@@ -61,6 +61,8 @@ try:
 except ImportError:  # pragma: no cover - dependency hint
     sys.exit("PyYAML is required: pip install pyyaml")
 
+import a3i_config  # loads .env and resolves the shared roots (flag > env > .env > default)
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -266,8 +268,8 @@ def prepare_one(config_path: Path, args, gen_tool: Path, conv_tool: Path) -> Non
     if not cfg or "dataset_id" not in cfg:
         sys.exit(f"{config_path}: missing dataset_id")
     base_id = cfg["dataset_id"]
-    parquet_dir = resolve_path(args.parquet_dir)
-    prepared_root = resolve_path(args.prepared_root)
+    parquet_dir = a3i_config.parquet_dir(args.parquet_dir)
+    prepared_root = a3i_config.prepared_root(args.prepared_root)
     parquet = source_parquet_path(cfg, parquet_dir)
 
     # Subset naming for --max-rows (single-config only).
@@ -300,10 +302,8 @@ def main() -> int:
     ap.add_argument("configs", nargs="*", help="dataset config YAML paths")
     ap.add_argument("--all", action="store_true",
                     help="prepare every configs/datasets/*.yaml")
-    ap.add_argument("--prepared-root",
-                    default=os.environ.get("A3I_PREPARED_ROOT", "data/prepared"))
-    ap.add_argument("--parquet-dir",
-                    default=os.environ.get("A3I_PARQUET_DIR", "data/raw"))
+    ap.add_argument("--prepared-root", default=None)
+    ap.add_argument("--parquet-dir", default=None)
     ap.add_argument("--max-rows", type=int, default=None)
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--verify", choices=["full", "structural", "none"], default="full")

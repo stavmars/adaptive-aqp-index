@@ -16,12 +16,37 @@ A3I experiments are orchestrated via Python scripts and YAML configuration files
 
 ## Running Experiments
 
+**Prerequisites.** Build the C++ tools first — the scripts shell out to
+`a3i_run`, `generate_workload`, and the converters under `build/`:
+```sh
+cmake -S . -B build -G Ninja && cmake --build build
+```
+
+**Directory configuration.** Every script resolves the prepared-data, source-Parquet,
+results, and workload roots in this order: **CLI flag > environment variable >
+a repo-root `.env` file > repo-relative default** (`data/prepared`, `data/raw`,
+`experiments/results`, `experiments/workloads`). Set machine-specific paths once
+in a git-ignored `.env` (copy `.env.example`) instead of passing flags every
+time:
+```sh
+# .env
+A3I_PREPARED_ROOT=/path/to/prepared
+A3I_PARQUET_DIR=/path/to/parquet
+# A3I_RESULTS_ROOT / A3I_WORKLOADS_DIR default under the repo
+```
+The explicit `--prepared-root`/`--results-root` flags below are then optional and
+override the `.env`/defaults when given.
+
 1. **Prepare Datasets:**
    - Use `scripts/prepare_dataset.py` to generate or convert datasets into the prepared format.
 2. **Configure Workloads and Plans:**
    - Edit or extend YAML files in `configs/workloads/` and `experiments/plans/` to define new workloads or experiment axes.
 3. **Run Experiments:**
-   - Execute:
+   - With roots set in `.env` (above), the common case is just the plan id:
+     ```sh
+     python3 scripts/run_experiments.py --plan <plan_id>
+     ```
+   - The fully-explicit form (flags override `.env`/defaults):
      ```sh
      python3 scripts/run_experiments.py --plan <plan_id> --plans-dir experiments/plans --workload-config-dir configs/workloads --prepared-root <prepared_dir> --results-root <results_dir>
      ```
