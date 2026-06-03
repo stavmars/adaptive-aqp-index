@@ -1,7 +1,7 @@
 #include "a3i/aqp/eager_materialize.hpp"
 
 #include <optional>
-#include <unordered_map>
+#include <span>
 #include <vector>
 
 #include "a3i/aqp/summary.hpp"
@@ -36,14 +36,18 @@ void materialize_all_summaries(const AdaptiveAccessPath& access_path,
     }
 
     // Per-partition, per-measure exact moments. One sequential sweep per column
-    // routes each value into its owning partition's accumulator.
+    // routes each value into its owning partition's accumulator. The column is
+    // read through its raw mapped span (no per-element bounds checks) and the
+    // kernel is told to expect a front-to-back scan so it reads ahead.
     std::vector<std::vector<MomentStats>> acc(
         static_cast<std::size_t>(max_id) + 1,
         std::vector<MomentStats>(measure_count));
     for (std::size_t mid = 0; mid < measure_count; ++mid) {
         const auto m = static_cast<MeasureId>(mid);
+        store.advise_sequential(m);
+        const std::span<const double> col = store.measure_column(m);
         for (RowId r = 0; r < n; ++r) {
-            acc[owner[r]][mid].add_if_present(store.measure_value(r, m));
+            acc[owner[r]][mid].add_if_present(col[r]);
         }
     }
 
@@ -65,33 +69,37 @@ void materialize_all_summaries(const AdaptiveAccessPath& access_path,
     // every parent partition also carries a complete summary covering its whole
     // sub-tree. Welford merge is associative and commutative, so accumulating
     // each descendant into a parent one at a time yields the parent's exact
-    // moments; no measure is read again.
-    std::unordered_map<PartitionId, std::vector<MomentStats>> parent_acc;
-    std::unordered_map<PartitionId, std::uint64_t> parent_pop;
+    // moments; no measure is read again. A parent is always created before its
+    // children, so its id is smaller than any descendant leaf id and the dense
+    // accumulators sized to max_id+1 index it directly -- no hashing.
+    std::vector<std::vector<MomentStats>> parent_acc(
+        static_cast<std::size_t>(max_id) + 1);
+    std::vector<std::uint64_t> parent_pop(static_cast<std::size_t>(max_id) + 1, 0);
+    std::vector<char> is_parent(static_cast<std::size_t>(max_id) + 1, 0);
     for (PartitionId id : active) {
         std::optional<PartitionId> cur = access_path.parent(id);
         while (cur) {
-            auto it = parent_acc.find(*cur);
-            if (it == parent_acc.end()) {
-                it = parent_acc
-                         .emplace(*cur, std::vector<MomentStats>(measure_count))
-                         .first;
+            if (!is_parent[*cur]) {
+                is_parent[*cur] = 1;
+                parent_acc[*cur].resize(measure_count);
             }
             for (std::size_t mid = 0; mid < measure_count; ++mid) {
-                it->second[mid].merge(acc[id][mid]);
+                parent_acc[*cur][mid].merge(acc[id][mid]);
             }
             parent_pop[*cur] += population[id];
             cur = access_path.parent(*cur);
         }
     }
-    for (auto& [id, moments] : parent_acc) {
+    for (std::size_t id = 0; id < is_parent.size(); ++id) {
+        if (!is_parent[id]) continue;
+        const auto pid = static_cast<PartitionId>(id);
         const std::uint64_t pop = parent_pop[id];
-        state.ensure_partition(id, measure_count);
+        state.ensure_partition(pid, measure_count);
         for (std::size_t mid = 0; mid < measure_count; ++mid) {
             const auto m = static_cast<MeasureId>(mid);
-            MeasureSummary& s = state.get_or_create(id, m, pop);
+            MeasureSummary& s = state.get_or_create(pid, m, pop);
             s.sampled_rows = pop;
-            s.non_nan = moments[mid];
+            s.non_nan = parent_acc[id][mid];
         }
     }
 }
