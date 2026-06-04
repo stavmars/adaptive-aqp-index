@@ -46,6 +46,14 @@ override the `.env`/defaults when given.
      ```sh
      python3 scripts/run_experiments.py --plan <plan_id>
      ```
+   - `--plan` accepts several ids, and `--all` runs every plan except the dev
+     ones (`_defaults`, `quicktest`, `smoke`). Cells shared across plans are
+     computed once (a cell already on disk is skipped), so `--all` runs the
+     union of distinct cells, not the sum of per-plan counts:
+     ```sh
+     python3 scripts/run_experiments.py --plan eb_sweep nm_sweep
+     python3 scripts/run_experiments.py --all
+     ```
    - The fully-explicit form (flags override `.env`/defaults):
      ```sh
      python3 scripts/run_experiments.py --plan <plan_id> --plans-dir experiments/plans --workload-config-dir configs/workloads --prepared-root <prepared_dir> --results-root <results_dir>
