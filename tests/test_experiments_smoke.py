@@ -128,7 +128,17 @@ def assert_paths_and_idempotency(work: Path, prepared: Path, plans: Path,
                  "--results-root", str(results), "--workloads-dir", str(work / "workloads"),
                  "--warm"])
     assert "0 run" in again.stdout, again.stdout
-    print("paths + idempotency: OK")
+
+    # Completeness report: every expected cell is present on disk.
+    rep = run([sys.executable, str(SCRIPTS / "run_experiments.py"),
+               "--plan", "smoke", "--plans-dir", str(plans),
+               "--workload-config-dir", str(wlcfg), "--prepared-root", str(prepared),
+               "--results-root", str(results), "--workloads-dir", str(work / "workloads"),
+               "--report"])
+    assert "0 missing" in rep.stdout, rep.stdout
+    # And a durable per-cell run log was written.
+    assert list((results / "_runlog").glob("smoke_*.jsonl")), "no _runlog written"
+    print("paths + idempotency + report: OK")
 
 
 def validate(work: Path, results: Path, dataset_id: str) -> None:

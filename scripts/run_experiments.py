@@ -26,7 +26,10 @@ Pipeline per plan:
      (``posix_fadvise(DONTNEED)`` over exactly the dataset's columns); an
      optional ``--drop-caches-cmd`` hook additionally flushes the whole-machine
      page cache for a stricter cold baseline.
-  5. Write a ``run_manifest`` log of every cell's disposition.
+  5. Append every cell's disposition to a durable per-run log under
+     ``<results>/_runlog/`` (one line per cell, flushed as it finishes, so an
+     external kill still leaves a record); ``--report`` later diffs the plan's
+     expected cells against what is on disk.
 
 Usage:
     scripts/run_experiments.py --plan headline
@@ -412,6 +415,58 @@ def run_cell(a3i_run: Path, cell: Cell, manifest: Path, workload_csv: Path,
     os.replace(tmp_m, runmeta)
 
 
+# --- run log (durable, append-as-you-go) + completeness report ---------------
+
+def _runlog_path(results_root: Path, plan: str, utc: str) -> Path:
+    """Per-run append-only log under `<results>/_runlog/<plan>_<stamp>.jsonl`.
+
+    Written one line per cell as it is dispositioned (not once at the end), so a
+    run killed externally still leaves a record of every cell attempted."""
+    d = results_root / "_runlog"
+    d.mkdir(parents=True, exist_ok=True)
+    stamp = utc.replace(":", "").replace("-", "")
+    return d / f"{plan}_{stamp}.jsonl"
+
+
+def _latest_runlog(results_root: Path, plan: str) -> Path | None:
+    d = results_root / "_runlog"
+    cands = sorted(d.glob(f"{plan}_*.jsonl")) if d.is_dir() else []
+    return cands[-1] if cands else None
+
+
+def report_completeness(cells, results_root: Path, plan: str) -> int:
+    """Compare the plan's expected cells against the `qresults` files on disk
+    (atomic writes => a present file is a complete cell, so this is robust to any
+    termination). Missing cells are labelled from the latest run log when it
+    explains them (error/oom) and `never-run` otherwise. Returns 1 if incomplete.
+    """
+    present, missing = [], []
+    for cell in cells:
+        q, _ = cell_paths(results_root, cell.dataset, cell.workload,
+                          cell.substrate, cell.method, cell.key, cell.run_id)
+        rel = str(q.relative_to(results_root))
+        (present if q.is_file() else missing).append(rel)
+
+    why: dict[str, str] = {}
+    lg = _latest_runlog(results_root, plan)
+    if lg:
+        for line in lg.read_text().splitlines():
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if "path" in rec:
+                why[rec["path"]] = rec.get("cause") or rec.get("status") or ""
+
+    print(f"plan '{plan}': {len(cells)} expected, {len(present)} present, "
+          f"{len(missing)} missing")
+    for rel in missing:
+        print(f"  MISSING ({why.get(rel) or 'never-run'}): {rel}")
+    if lg:
+        print(f"(missing reasons cross-referenced from {lg})")
+    return 1 if missing else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Run an A3I experiment plan.")
     ap.add_argument("--plan", required=True, help="plan id under experiments/plans/")
@@ -427,6 +482,10 @@ def main() -> int:
                     help="workload-CSV dir (default: experiments/workloads)")
     ap.add_argument("--dry-run", action="store_true",
                     help="enumerate cells and print dispositions; run nothing")
+    ap.add_argument("--report", action="store_true",
+                    help="report which expected cells are present vs missing on "
+                         "disk (with the reason from the run log) and exit; "
+                         "run nothing")
     ap.add_argument("--force", action="store_true",
                     help="re-run cells whose outputs already exist")
     ap.add_argument("--stale", action="store_true",
@@ -464,6 +523,9 @@ def main() -> int:
     cells = enumerate_cells(plan, catalog, prepared_root, workloads_dir, gen_tool,
                             run_substrate, approximate_runs)
 
+    if args.report:
+        return report_completeness(cells, results_root, args.plan)
+
     # Runs are cold by default: before every cell the dataset's column files are
     # evicted from the page cache so the memory-mapped columns are read from
     # disk, not from a cache warmed by an earlier run. Eviction is unprivileged
@@ -472,54 +534,64 @@ def main() -> int:
     # machine for a stricter baseline. --warm skips eviction (records cold=false).
     hook = None if args.warm else args.drop_caches_cmd
 
-    log = {"plan": args.plan, "engine_build_version": version,
-           "utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-           "total_cells": len(cells), "cells": []}
     done = skipped = errored = 0
+    utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    # Durable per-cell log: a real run appends one line as each cell finishes and
+    # flushes, so an external kill still leaves the disposition of every cell
+    # attempted so far. A dry run writes none (it is a preview, not a run).
+    runlog = None if args.dry_run else open(_runlog_path(results_root, args.plan, utc), "w")
 
-    for cell in cells:
-        qresults, runmeta = cell_paths(results_root, cell.dataset, cell.workload,
-                                       cell.substrate, cell.method, cell.key,
-                                       cell.run_id)
-        rel = str(qresults.relative_to(results_root))
-        if not args.force and cell_is_fresh(runmeta, version, args.stale):
-            skipped += 1
-            log["cells"].append({"path": rel, "status": "skipped"})
-            continue
-        if args.dry_run:
-            print(f"would run: {cell.method:14s} {rel}")
-            log["cells"].append({"path": rel, "status": "would-run"})
-            continue
+    def logline(rec: dict) -> None:
+        if runlog is not None:
+            runlog.write(json.dumps(rec) + "\n")
+            runlog.flush()
 
-        manifest = manifest_path(prepared_root, cell.dataset)
-        workload_csv = workloads_dir / f"{cell.workload}.csv"
-        # Cold by default: evict this cell's columns (unprivileged), and also
-        # flush the whole machine when a hook is configured. --warm skips both.
-        cold = False
-        if not args.warm:
-            evicted = evict_from_cache(column_files(manifest))
-            dropped = drop_caches(hook)
-            cold = evicted or dropped
-        try:
-            run_cell(a3i_run, cell, manifest, workload_csv, qresults, runmeta,
-                     cold, args.mem_launcher)
-            done += 1
-            print(f"ran: {cell.method:14s} {rel}")
-            log["cells"].append({"path": rel, "status": "done"})
-        except subprocess.CalledProcessError as e:
-            errored += 1
-            cause = "oom" if mem_bytes(cell.mem) is not None else "error"
-            print(f"FAILED ({cause}): {cell.method:14s} {rel}\n{e.stderr}",
-                  file=sys.stderr)
-            log["cells"].append({"path": rel, "status": "error", "cause": cause})
+    try:
+        logline({"plan": args.plan, "engine_build_version": version,
+                 "utc": utc, "total_cells": len(cells)})
+        for cell in cells:
+            qresults, runmeta = cell_paths(results_root, cell.dataset, cell.workload,
+                                           cell.substrate, cell.method, cell.key,
+                                           cell.run_id)
+            rel = str(qresults.relative_to(results_root))
+            if not args.force and cell_is_fresh(runmeta, version, args.stale):
+                skipped += 1
+                logline({"path": rel, "status": "skipped"})
+                continue
+            if args.dry_run:
+                print(f"would run: {cell.method:14s} {rel}")
+                continue
 
-    stamp = log["utc"].replace(":", "").replace("-", "")
-    log_path = results_root / f"run_manifest_{args.plan}_{stamp}.json"
-    log_path.write_text(json.dumps(log, indent=2) + "\n")
+            manifest = manifest_path(prepared_root, cell.dataset)
+            workload_csv = workloads_dir / f"{cell.workload}.csv"
+            # Cold by default: evict this cell's columns (unprivileged), and also
+            # flush the whole machine when a hook is configured. --warm skips both.
+            cold = False
+            if not args.warm:
+                evicted = evict_from_cache(column_files(manifest))
+                dropped = drop_caches(hook)
+                cold = evicted or dropped
+            try:
+                run_cell(a3i_run, cell, manifest, workload_csv, qresults, runmeta,
+                         cold, args.mem_launcher)
+                done += 1
+                print(f"ran: {cell.method:14s} {rel}")
+                logline({"path": rel, "status": "done"})
+            except subprocess.CalledProcessError as e:
+                errored += 1
+                cause = "oom" if mem_bytes(cell.mem) is not None else "error"
+                print(f"FAILED ({cause}): {cell.method:14s} {rel}\n{e.stderr}",
+                      file=sys.stderr)
+                logline({"path": rel, "status": "error", "cause": cause})
+    finally:
+        if runlog is not None:
+            runlog.close()
 
     print(f"\nplan '{args.plan}': {len(cells)} cells "
           f"({done} run, {skipped} skipped, {errored} error)")
-    print(f"log: {log_path}")
+    if runlog is not None:
+        print(f"log: {_runlog_path(results_root, args.plan, utc)}  "
+              f"(check completeness later with --report)")
     return 1 if errored and not args.dry_run else 0
 
 

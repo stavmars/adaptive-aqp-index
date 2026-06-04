@@ -50,8 +50,9 @@ override the `.env`/defaults when given.
      ```sh
      python3 scripts/run_experiments.py --plan <plan_id> --plans-dir experiments/plans --workload-config-dir configs/workloads --prepared-root <prepared_dir> --results-root <results_dir>
      ```
-   - Options: `--dry-run`, `--force`, `--stale`, `--warm`, `--drop-caches-cmd`, `--mem-launcher`.
-   - Results are written to `results/<dataset>/<workload>/<substrate_dir>/<method>/qresults_<key>_run<R>.csv` and a sibling `runmeta_...json`.
+   - Options: `--dry-run`, `--force`, `--stale`, `--warm`, `--drop-caches-cmd`, `--mem-launcher`, `--report`.
+   - Results are written to `results/<dataset>/<workload>/<substrate_dir>/<method>/qresults_<key>_run<R>.csv` and a sibling `runmeta_...json`. Each cell's disposition is appended (as it finishes) to a durable per-run log under `results/_runlog/<plan>_<stamp>.jsonl`, so an interrupted run still leaves a record.
+   - **Completeness:** `--report` (runs nothing) diffs the plan's expected cells against what is on disk and lists any missing ones, labelling the reason (`error`/`oom`/`never-run`) from the run log. Use it after a long run to confirm nothing silently dropped out.
 4. **Validate Results:**
    - Run:
      ```sh

@@ -1,9 +1,18 @@
-# Fast test plan for quick iteration during development
+# Cross-dataset test scenario: the full method ladder on the three real datasets
+# (taxi, gaia_dr3, ebird_us) across both workload families, plus a synth anchor.
+# One run, queries capped — a correctness + expected-behaviour check across
+# datasets, not a full sweep. Raise max_queries / add run_ids once it looks good.
 plan_id: quicktest
-runs: [scan, kd, kd_agg, adkd, adkd_agg, adkd_sampling, a3i]
+runs: [scan, a3i, kd, kd_agg, adkd, adkd_agg, adkd_sampling]
 workloads:
-  - synth10_100M_clustered
-nm: [1]
+  - taxi_clustered
+  - taxi_random
+  - gaia_dr3_random
+  - gaia_dr3_clustered
+  - ebird_us_random
+  - ebird_us_clustered
+nm: [2]
 eb: [0.01]
 run_id: [0]
-max_queries: 100
+max_queries: 500
+mem: [inmem]
