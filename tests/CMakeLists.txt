@@ -86,6 +86,15 @@ if(Python3_Interpreter_FOUND)
         ENVIRONMENT "A3I_BUILD_DIR=${CMAKE_BINARY_DIR}")
 endif()
 
+# Analysis layer: plotting/load + plotting/aggregate + analyze_results
+# diagnostics, on tiny in-process fixtures. Fast and
+# deterministic -> the `unit` gate. Skips itself if pandas is unavailable.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME analysis.test_analysis
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_analysis.py)
+    set_tests_properties(analysis.test_analysis PROPERTIES LABELS "unit")
+endif()
+
 # Statistical gate: seeded sanity plus the empirical CI-coverage sweep
 # (including the recorded heavy-tail under-coverage). Kept out of the fast
 # `unit` label because it runs many seeds.

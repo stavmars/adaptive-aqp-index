@@ -9,13 +9,15 @@ CMakeCache.txt
 CMakeFiles/
 compile_commands.json
 
-# Data, prepared columns, results, plots (regenerated)
+# Data, prepared columns, results, plots, analysis (regenerated)
 /data/raw/
 /data/prepared/
 /experiments/results/
 /experiments/validation/
 /experiments/plots/
+/experiments/analysis/
 /experiments/workloads/reservoirs/
+/experiments/*.log
 *.bin
 
 # Truth and large CSVs are regenerated (keep tiny fixtures under tests/)
