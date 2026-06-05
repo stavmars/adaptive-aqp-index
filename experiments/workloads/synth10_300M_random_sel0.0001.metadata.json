@@ -1,0 +1,22 @@
+{
+  "count": 500,
+  "dataset_id": "synth10_300M",
+  "dimensions": 2,
+  "domain_bounds": {
+    "high": [
+      1000.0,
+      1000.0
+    ],
+    "low": [
+      0.0,
+      0.0
+    ]
+  },
+  "extent_mode": "closed_form",
+  "family": "uniform_random",
+  "fingerprint": 2775029726998031143,
+  "focus": [],
+  "name": "synth10_300M_random_sel0.0001",
+  "seed": 0,
+  "selectivity": 0.0001
+}
