@@ -1,0 +1,25 @@
+# Python dependencies for the A3I experiment / analysis / plotting scripts.
+#
+# Recommended install into a project-local virtual environment:
+#
+#   python3 -m venv .venv
+#   source .venv/bin/activate
+#   pip install -r requirements.txt
+#
+# Then build/test with the venv active so the Python tests use it:
+#
+#   cmake -S . -B build && ctest --test-dir build -L unit
+
+pandas>=2.0
+matplotlib>=3.6
+PyYAML>=6.0
+
+# Optional -- only for the OpenStreetMap basemap drawn under geographic
+# workloads (visualize_workload --basemap, on by default for taxi/ebird).
+# contextily fetches the tiles; pyproj reprojects to Web Mercator. Remove both
+# if you never plot geographic workloads.
+contextily>=1.5
+pyproj>=3.3
+
+# Not included: scripts/download_gaia_benchmark.py is a one-off data fetcher
+# that needs `astroquery astropy` (see its header) -- install those ad hoc.
