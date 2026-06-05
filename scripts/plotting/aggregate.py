@@ -97,10 +97,13 @@ def cell_summary(frame: pd.DataFrame, eb: float) -> pd.DataFrame:
     cost = cost_summary(frame)
     acc = accuracy_summary(frame, eb)
     out = cost.merge(acc, on=list(METHOD_KEYS), how="left")
-    # speedup = scan cumulative / this method's cumulative, within (dataset, workload)
-    scan = (out[out["method"] == "scan"][["dataset", "workload", "cum_ms"]]
+    # speedup = scan cumulative / this method's cumulative, within the comparable
+    # slice (same nm/mem/str/n) -- not just (dataset, workload), or multiple nm
+    # would match several scan cells and duplicate every row.
+    slice_cols = ["dataset", "workload", "nm", "mem", "str", "n"]
+    scan = (out[out["method"] == "scan"][slice_cols + ["cum_ms"]]
             .rename(columns={"cum_ms": "scan_cum_ms"}))
-    out = out.merge(scan, on=["dataset", "workload"], how="left")
+    out = out.merge(scan, on=slice_cols, how="left")
     out["speedup_vs_scan"] = out["scan_cum_ms"] / out["cum_ms"]
     return out
 

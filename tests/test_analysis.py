@@ -237,5 +237,31 @@ class TestDiagnostics(unittest.TestCase):
             self.assertTrue(any(f["check"] == "a3i beats scan" for f in findings))
 
 
+@unittest.skipUnless(_HAVE_DEPS, "pandas not available")
+class TestMultiNm(unittest.TestCase):
+    def test_multiple_nm_per_workload_no_crash(self):
+        # A (dataset, workload) with two nm values has the same method twice;
+        # comparison must slice on nm, not collide methods. (Regression: a
+        # groupby(dataset,workload)+reindex(method) crashed on duplicate labels.)
+        approx = lambda q: _aggs(["m0", "m1"], lambda a, m: 100.5, exact=False,  # noqa: E731
+                                 ci=lambda a, m, e: (95.0, 105.0))
+        with tempfile.TemporaryDirectory() as t, tempfile.TemporaryDirectory() as a:
+            for k, ek in (("mcols1_memINMEM_n3_str1024", "err0.01_mcols1_memINMEM_n3_str1024"),
+                          ("mcols2_memINMEM_n3_str1024", "err0.01_mcols2_memINMEM_n3_str1024")):
+                write_cell(t, "ds", "wl", "n_a", "scan", k, 0, 3, EXACT3,
+                           latency=10.0, reads=1000)
+                write_cell(t, "ds", "wl", "adaptive_kd", "a3i", ek, 0, 3, approx,
+                           latency=1.5, reads=60)
+            argv = sys.argv
+            sys.argv = ["analyze_results.py", "--results-root", t,
+                        "--analysis-root", a]
+            try:
+                rc = analyze_results.main()      # pre-fix: raised ValueError
+            finally:
+                sys.argv = argv
+            self.assertIn(rc, (0, 1))
+            self.assertTrue((Path(a) / "summary.csv").is_file())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
