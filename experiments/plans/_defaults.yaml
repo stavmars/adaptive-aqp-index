@@ -12,7 +12,10 @@
 #   mem         memory setting per run: unbounded (mmap, no cap), inmem (measure
 #               columns loaded fully resident, no cap), or a cap like 16GiB (mmap
 #               under a cgroup budget). The measure storage backing follows from it.
-#   run_id      outer repetition index
+#   run_id      outer repetition index (the default run list for every method)
+#   run_id_by_method  optional {method: [run ids]} overriding run_id for named
+#               methods (e.g. run slow deterministic baselines once while the
+#               sampling methods get more seeds); unlisted methods use run_id
 #   max_queries cap on queries replayed (null = full sequence)
 #   confidence  CI confidence level (applies to approximate runs)
 
@@ -33,5 +36,9 @@ eb: [0.01]
 str: [1024]
 mem: [inmem]
 run_id: [0]
+run_id_by_method:
+  scan:   [0]         
+  kd:     [0]
+  kd_agg: [0]
 max_queries: null
 confidence: 0.95

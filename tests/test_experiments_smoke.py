@@ -71,7 +71,8 @@ def write_plan_tree(work: Path, dataset_id: str) -> tuple[Path, Path]:
         "eb: [0.05]\n"
         "str: [1024]\n"
         "mem: [unbounded]\n"
-        "run_id: [0]\n"
+        "run_id: [0, 1]\n"
+        "run_id_by_method: {scan: [0]}\n"   # scan once; other methods twice
         "max_queries: null\n"
         "confidence: 0.95\n"
     )
@@ -120,6 +121,11 @@ def assert_paths_and_idempotency(work: Path, prepared: Path, plans: Path,
     # Exact runs carry no err in the key; approximate a3i carries err.
     assert "err" not in scan[0].name and "err" not in kd[0].name, (scan[0].name, kd[0].name)
     assert "err0.05" in a3i[0].name, a3i[0].name
+
+    # Per-method run override: scan runs once (run0 only); other methods get the
+    # default run_id [0, 1], so a3i has a run1.
+    assert all("_run0.csv" in p.name for p in scan), [p.name for p in scan]
+    assert any("_run1.csv" in p.name for p in a3i), [p.name for p in a3i]
 
     # Idempotency: a second run with no --force re-runs nothing.
     again = run([sys.executable, str(SCRIPTS / "run_experiments.py"),

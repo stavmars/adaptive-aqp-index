@@ -66,7 +66,7 @@ PLANS_DIR = REPO_ROOT / "experiments" / "plans"
 WORKLOAD_CONFIG_DIR = REPO_ROOT / "configs" / "workloads"
 
 AXIS_KEYS = ("runs", "workloads", "nm", "eb", "str", "mem", "run_id",
-             "max_queries", "confidence")
+             "run_id_by_method", "max_queries", "confidence")
 
 
 # --- tool resolution ---------------------------------------------------------
@@ -241,6 +241,14 @@ def enumerate_cells(plan: dict, catalog: dict, prepared_root: Path,
     measure_counts: dict[str, int] = {}
     qcounts: dict[str, int] = {}
 
+    # Per-method run-count override: a listed method uses its own run_id list,
+    # any other method falls back to the plan's `run_id`. (Lets slow/
+    # deterministic baselines run once while sampling methods get more seeds.)
+    per_method_runs = plan.get("run_id_by_method") or {}
+    for m in per_method_runs:
+        if m not in run_substrate:
+            sys.exit(f"run_id_by_method names unknown method '{m}'")
+
     for wid in plan["workloads"]:
         if wid not in catalog:
             sys.exit(f"plan references unknown workload '{wid}'")
@@ -260,12 +268,13 @@ def enumerate_cells(plan: dict, catalog: dict, prepared_root: Path,
                 sys.exit(f"unknown run/method '{method}' in plan")
             substrate = run_substrate[method]
             approx = method in approximate_runs
+            run_ids = per_method_runs.get(method, plan["run_id"])
             for nm in plan["nm"]:
                 if nm > measure_counts[dataset]:
                     continue  # dataset has fewer measures than this nm
                 for strv in plan["str"]:
                     for mem in plan["mem"]:
-                        for run_id in plan["run_id"]:
+                        for run_id in run_ids:
                             mq = plan["max_queries"]
                             qcount = qcounts[wid] if mq in (None, 0) else min(mq, qcounts[wid])
                             # Approximate runs fan out over eb; exact runs emit
