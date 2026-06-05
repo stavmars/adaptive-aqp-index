@@ -301,10 +301,15 @@ CellReport run_cell(const CellConfig& config) {
     double init_ms = 0.0;
     if (!spec.is_scan) {
         SubstrateConfig scfg;
-        scfg.domain_bounds        = manifest.domain_bounds;
         scfg.refinement_threshold = config.refinement_threshold;
         scfg.stochastic_cracking  = config.stochastic_cracking;
         scfg.leaf_min_size        = config.leaf_min_size;
+        // Size the index to the observed data extent (per-dimension min/max),
+        // not the declared domain; the declared domain is the workload's.
+        scfg.data_bounds.dims.reserve(manifest.dimensions.size());
+        for (const auto& dim : manifest.dimensions) {
+            scfg.data_bounds.dims.push_back(Range{dim.min, dim.max});
+        }
         substrate = SubstrateFactory::instance().create(spec.substrate_id, scfg);
         substrate->prepare(table);
         EngineConfig ecfg = behavior_config(spec.behavior);

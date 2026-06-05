@@ -31,7 +31,6 @@ IndexTable make_grid() {
 
 SubstrateConfig config(std::uint32_t leaf_min_size) {
     SubstrateConfig cfg;
-    cfg.domain_bounds   = HyperRect{{{0.0, 16.0}, {0.0, 16.0}}};
     cfg.leaf_min_size   = leaf_min_size;
     return cfg;
 }
@@ -111,6 +110,22 @@ TEST(StaticKd, BuildSplitsDownToLeafSize) {
     }
     check_cover(path, table);
     check_points_in_bounds(path, table);
+}
+
+// The root's exclusive top is lifted above the data, so even a point sitting
+// exactly on the data maximum lands strictly inside its leaf's half-open bounds
+// rather than on an excluded edge. Without that, the max-valued point would be
+// counted wholesale through a "contained" leaf, overcounting versus a scan.
+TEST(StaticKd, MaxValuedPointLiesInsideItsLeafBounds) {
+    const std::vector<double> xs{0.0, 3.0, 6.0, 9.0, 12.0};
+    const std::vector<double> ys{0.0, 3.0, 6.0, 9.0, 12.0};  // (12,12) is the max
+    IndexTable table = IndexTable::from_columns({xs, ys});
+    StaticKdAccessPath path(config(/*leaf_min_size=*/2));
+    path.prepare(table);
+    path.ensure_built();
+
+    check_cover(path, table);
+    check_points_in_bounds(path, table);  // (12,12) must be inside, not on edge
 }
 
 TEST(StaticKd, SingleLeafWhenThresholdExceedsTable) {

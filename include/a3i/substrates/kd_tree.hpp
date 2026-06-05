@@ -48,6 +48,25 @@ public:
     /// [0, n) with the given bounds.
     void reset(const HyperRect& root_bounds, IndexPos n);
 
+    /// Root bounds for an index over `table` whose data extent is `data_bounds`
+    /// (per-axis [min, max]; pass an empty rect to derive it by scanning).
+    ///
+    /// Partition bounds tile half-open [low, high): the upper edge is
+    /// exclusive, so the root's top must sit strictly above the largest value,
+    /// otherwise a point on the maximum would land on the rightmost partition's
+    /// excluded top edge and be miscounted. Each axis' upper bound is therefore
+    /// lifted one representable step past the data (std::nextafter); the lower
+    /// bound, which is inclusive, stays at the data minimum.
+    ///
+    /// The root is sized to the data, not to an infinite or externally declared
+    /// domain, on purpose. A finite top matching the data lets a query that
+    /// spans the whole range be recognised as fully containing the root and
+    /// answered from precomputed summaries with zero row reads; an unbounded
+    /// top could never compare as "contained" for any finite query, forcing the
+    /// widest queries to re-read the data they already cover.
+    static HyperRect compute_root_bounds(const HyperRect& data_bounds,
+                                         const IndexTable& table);
+
     bool empty() const { return nodes_.empty(); }
 
     /// Entry points of a descent: the single root id {0} when non-empty.

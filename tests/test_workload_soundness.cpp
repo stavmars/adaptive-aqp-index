@@ -150,7 +150,6 @@ struct Workload {
     // crack gate (refinement_threshold == 1024), deliberately not overridden.
     SubstrateConfig substrate() const {
         SubstrateConfig cfg;
-        cfg.domain_bounds = HyperRect{{{0.0, xhi}, {0.0, 1.0}}};
         return cfg;
     }
 

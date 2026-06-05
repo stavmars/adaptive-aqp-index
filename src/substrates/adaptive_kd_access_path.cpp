@@ -18,8 +18,10 @@ void AdaptiveKdAccessPath::ensure_built() {
     if (table_ == nullptr) {
         throw std::logic_error("AdaptiveKdAccessPath::ensure_built before prepare");
     }
-    // One root partition owning the whole table; its bounds are the domain.
-    tree_.reset(config_.domain_bounds, static_cast<IndexPos>(table_->size()));
+    // One root partition owning the whole table; its bounds span the data,
+    // with the exclusive top lifted just above it to keep the tiling half-open.
+    tree_.reset(KdTree::compute_root_bounds(config_.data_bounds, *table_),
+                static_cast<IndexPos>(table_->size()));
     built_ = true;
 }
 

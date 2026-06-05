@@ -120,7 +120,6 @@ struct Dataset {
 
     SubstrateConfig substrate() const {
         SubstrateConfig cfg;
-        cfg.domain_bounds        = HyperRect{{{0.0, xhi}, {0.0, 1.0}}};
         cfg.refinement_threshold = 64;
         return cfg;
     }

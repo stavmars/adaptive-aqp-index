@@ -21,11 +21,8 @@ IndexTable make_table() {
     return IndexTable::from_columns({xs, ys});
 }
 
-HyperRect domain() { return HyperRect{{{0.0, 10.0}, {0.0, 10.0}}}; }
-
 SubstrateConfig config() {
     SubstrateConfig cfg;
-    cfg.domain_bounds = domain();
     return cfg;
 }
 

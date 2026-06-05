@@ -49,7 +49,8 @@ void StaticKdAccessPath::ensure_built() {
     if (table_ == nullptr) {
         throw std::logic_error("StaticKdAccessPath::ensure_built before prepare");
     }
-    tree_.reset(config_.domain_bounds, static_cast<IndexPos>(table_->size()));
+    tree_.reset(KdTree::compute_root_bounds(config_.data_bounds, *table_),
+                static_cast<IndexPos>(table_->size()));
     if (table_->size() > 0 && table_->dimensions() > 0) {
         build(/*root=*/0, /*axis=*/0);
     }

@@ -35,7 +35,6 @@ IndexTable make_grid() {
 
 SubstrateConfig config(std::uint32_t threshold) {
     SubstrateConfig cfg;
-    cfg.domain_bounds = HyperRect{{{0.0, 12.0}, {0.0, 12.0}}};
     cfg.refinement_threshold = threshold;
     return cfg;
 }
@@ -124,6 +123,30 @@ std::vector<PartitionId> contained_leaves(const AdaptiveAccessPath& path,
         if (path.classify(id, q) == Containment::Contained) out.push_back(id);
     }
     return out;
+}
+
+// A point sitting exactly on the data maximum is excluded by a half-open query
+// (low <= p < high) reaching that maximum. The root's exclusive top is lifted
+// just above the data, so the point lies strictly inside the tiling and is not
+// summed wholesale through a "contained" root. Regression for the index-vs-scan
+// over-count seen on real data.
+TEST(Decompose, DomainMaxEdgePointExcludedFromContainedNode) {
+    // Three interior points plus one on the data maximum (12, 12).
+    const std::vector<double> xs{2.0, 4.0, 6.0, 12.0};
+    const std::vector<double> ys{2.0, 4.0, 6.0, 12.0};
+    IndexTable table = IndexTable::from_columns({xs, ys});
+    AdaptiveKdAccessPath path(config(/*threshold=*/100));  // root stays one leaf
+    path.prepare(table);
+    path.ensure_built();
+
+    const HyperRect q{{{0.0, 12.0}, {0.0, 12.0}}};  // upper bound == domain max
+    PartitionStateStore store;
+    const DecompositionResult d = decompose_descent(
+        q, path, store, table, kMeasures, /*persist=*/false, /*allow_refine=*/false);
+
+    const std::set<RowId> truth = qualifying_rows(table, q);  // (12,12) excluded
+    EXPECT_EQ(truth.size(), 3u);
+    EXPECT_EQ(d.total_count, truth.size());
 }
 
 TEST(Decompose, ContributorsCoverQualifyingRowsDisjointlyPerMeasure) {

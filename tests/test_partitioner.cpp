@@ -28,11 +28,8 @@ IndexTable make_grid() {
     return IndexTable::from_columns({xs, ys});
 }
 
-HyperRect domain() { return HyperRect{{{0.0, 12.0}, {0.0, 12.0}}}; }
-
 SubstrateConfig config(std::uint32_t threshold) {
     SubstrateConfig cfg;
-    cfg.domain_bounds = domain();
     cfg.refinement_threshold = threshold;
     return cfg;
 }
@@ -189,16 +186,17 @@ TEST(Partitioner, RetiredParentsAreInactiveWithAncestry) {
 
 TEST(Partitioner, FailedCrackLeavesPartitionUnchanged) {
     IndexTable table = make_grid();
-    // Domain far larger than the data: all 144 points sit in [0,12) on each
-    // axis, but the root's bounds span [0,100).
+    // Root extent set far larger than the data: all 144 points sit in [0,12)
+    // on each axis, but the root spans [0,100). (Passing data_bounds directly
+    // exercises the failed-crack path; normally the extent tracks the data.)
     SubstrateConfig cfg;
-    cfg.domain_bounds = HyperRect{{{0.0, 100.0}, {0.0, 100.0}}};
+    cfg.data_bounds = HyperRect{{{0.0, 100.0}, {0.0, 100.0}}};
     cfg.refinement_threshold = 4;
     AdaptiveKdAccessPath path(cfg);
     path.prepare(table);
     path.ensure_built();
 
-    // This query is inside the (large) domain, so the oversized root is a
+    // This query is inside the (large) root, so the oversized root is a
     // boundary partition and refine attempts to crack it; but every pivot
     // lies above all of the data, so each Hoare partition lands every point
     // on one side and fails. Nothing splits.

@@ -115,7 +115,6 @@ struct Fixture {
 
     SubstrateConfig substrate() const {
         SubstrateConfig cfg;
-        cfg.domain_bounds        = HyperRect{{{0.0, kDomain}, {0.0, kDomain}}};
         cfg.refinement_threshold = 32;
         return cfg;
     }

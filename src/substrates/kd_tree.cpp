@@ -1,6 +1,8 @@
 #include "a3i/substrates/kd_tree.hpp"
 
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 
 namespace a3i {
@@ -15,6 +17,44 @@ void KdTree::reset(const HyperRect& root_bounds, IndexPos n) {
     root.leaf   = true;
     root.active = true;
     nodes_.push_back(std::move(root));
+}
+
+HyperRect KdTree::compute_root_bounds(const HyperRect& data_bounds,
+                                      const IndexTable& table) {
+    const std::size_t d = table.dimensions();
+    std::vector<double> lo(d, std::numeric_limits<double>::infinity());
+    std::vector<double> hi(d, -std::numeric_limits<double>::infinity());
+    if (data_bounds.dims.size() == d) {
+        // Extent supplied (e.g. from the manifest): no data scan needed.
+        for (std::size_t i = 0; i < d; ++i) {
+            lo[i] = data_bounds.dims[i].low;
+            hi[i] = data_bounds.dims[i].high;
+        }
+    } else {
+        // Fall back to a one-time scan when the extent is unknown.
+        const IndexPos n = static_cast<IndexPos>(table.size());
+        for (IndexPos p = 0; p < n; ++p) {
+            for (std::size_t i = 0; i < d; ++i) {
+                const double v = table.dim(p, static_cast<DimensionId>(i));
+                if (v < lo[i]) lo[i] = v;
+                if (v > hi[i]) hi[i] = v;
+            }
+        }
+    }
+    HyperRect root;
+    root.dims.reserve(d);
+    for (std::size_t i = 0; i < d; ++i) {
+        if (hi[i] < lo[i]) {
+            // No data on this axis: a degenerate but valid range.
+            root.dims.push_back(Range{0.0, 0.0});
+            continue;
+        }
+        // Lift the exclusive top one representable step past the data so no
+        // point sits on a partition's excluded upper edge.
+        root.dims.push_back(Range{
+            lo[i], std::nextafter(hi[i], std::numeric_limits<double>::infinity())});
+    }
+    return root;
 }
 
 std::vector<PartitionId> KdTree::roots() const {

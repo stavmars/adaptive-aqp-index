@@ -21,10 +21,16 @@
 namespace a3i {
 
 /// Construction-time parameters shared by substrates. A substrate uses
-/// only the fields it needs (the KD substrates use `domain_bounds` for the
-/// root and `refinement_threshold` as the crack gate).
+/// only the fields it needs (the KD substrates build the root from
+/// `data_bounds` and use `refinement_threshold` as the crack gate).
 struct SubstrateConfig {
-    HyperRect     domain_bounds;             ///< Bounds of the root partition.
+    /// Observed extent of the data per dimension ([min, max] on each axis).
+    /// The index sizes its root partition to the data itself, not to any
+    /// externally declared domain -- where the data is drives the
+    /// partitioning, and the query workload's domain stays a concern of the
+    /// experiment layer. May be left empty, in which case the substrate
+    /// derives the extent from the table at build time.
+    HyperRect     data_bounds;
     std::uint32_t refinement_threshold = 1024;
     bool          stochastic_cracking   = false;
     std::uint32_t leaf_min_size         = 1024;  ///< Used by the static build.
