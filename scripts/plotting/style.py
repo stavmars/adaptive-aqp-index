@@ -55,7 +55,7 @@ def method_style(method: str) -> dict:
 
 
 _RCPARAMS = {
-    "pdf.fonttype": 42,      # embed TrueType, not Type-3 (camera-ready requirement)
+    "pdf.fonttype": 42,
     "ps.fonttype": 42,
     "font.family": "serif",
     "font.size": 8,
@@ -73,7 +73,7 @@ _RCPARAMS = {
 
 
 def apply() -> None:
-    """Install the publication rcParams. Idempotent; safe to call per figure."""
+    """Install the figure rcParams. Idempotent; safe to call per figure."""
     plt.rcParams.update(_RCPARAMS)
 
 

@@ -95,6 +95,15 @@ if(Python3_Interpreter_FOUND)
     set_tests_properties(analysis.test_analysis PROPERTIES LABELS "unit")
 endif()
 
+# Exploratory plotting: the plot_results axis-role inference + ambiguity guard,
+# on tiny in-memory frames. Fast and deterministic -> the `unit` gate. Skips
+# itself if pandas/matplotlib are unavailable.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME explore.test_explore
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_explore.py)
+    set_tests_properties(explore.test_explore PROPERTIES LABELS "unit")
+endif()
+
 # Statistical gate: seeded sanity plus the empirical CI-coverage sweep
 # (including the recorded heavy-tail under-coverage). Kept out of the fast
 # `unit` label because it runs many seeds.
