@@ -295,7 +295,7 @@ TEST_F(WorkloadSoundness, ExactModeReproducesOracleUnderCumulativeCracking) {
     cfg.persist_summaries = false;
     QueryEngine engine(*wl_->store, table, path, cfg);
 
-    std::uint64_t total_splits = 0;
+    std::uint64_t total_refined = 0;
     for (int i = 0; i < kQueries; ++i) {
         const Rect&       r  = queries_[i];
         const QueryResult got =
@@ -304,12 +304,12 @@ TEST_F(WorkloadSoundness, ExactModeReproducesOracleUnderCumulativeCracking) {
         EXPECT_EQ(got.metrics.status, "exact") << "query " << i;
         EXPECT_EQ(got.metrics.exactify_cause, "none") << "query " << i;
         expect_exact_matches_oracle(got, oracle_for(r), i);
-        total_splits += got.metrics.partitions_split;
+        total_refined += got.metrics.partitions_refined;
     }
 
     // The workload must actually have exercised cracking, otherwise the
     // "under cumulative cracking" claim is vacuous.
-    EXPECT_GT(total_splits, 0u) << "the tree never cracked";
+    EXPECT_GT(total_refined, 0u) << "the tree never cracked";
 }
 
 // Approximate mode over the long workload: certified intervals stay sound on

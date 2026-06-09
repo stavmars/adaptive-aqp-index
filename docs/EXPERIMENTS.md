@@ -70,11 +70,47 @@ override the `.env`/defaults when given.
 
 ## Result Schema
 
-- **CSV Columns:** 25 columns, including `query_ordinal`, `method`, `substrate`, `dataset`, `workload`, `query_rect` (JSON), `aggregates` (JSON array), `latency_ms`, and more.
+One row per query, 23 columns. The authoritative header is `kHeader` in
+`src/experiments/cell_runner.cpp`; the field semantics are documented on
+`QueryMetrics` in `include/a3i/core/query.hpp`. Columns in order:
+
+| # | Column | Meaning |
+|---|--------|---------|
+| 1 | `query_ordinal` | 0-based position of the query within its workload. |
+| 2 | `method` | Run name (e.g. `a3i`, `scan`, `adkd_sampling`). |
+| 3 | `substrate` | Substrate id (e.g. `adaptive_kd`), or `n/a`/`none` for the scan oracle. |
+| 4 | `dataset` | Dataset label. |
+| 5 | `workload` | Workload label. |
+| 6 | `query_rect` | JSON `{ "lower": [...], "upper": [...] }` — the predicate rectangle. |
+| 7 | `aggregates` | JSON array, one object per (aggregate, measure); see below. |
+| 8 | `target_satisfied` | `true` iff every aggregate met its accuracy target. |
+| 9 | `status` | `exact`, `converged`, `exactified`, or `exhausted_unconverged`. |
+| 10 | `exactify_cause` | `none`, `cheaper_to_exactify`, or `gave_up` — why the residual was read in full. |
+| 11 | `pre_exactification_error_bound` | Worst relative half-width just before exactification (0 if none). |
+| 12 | `sampling_seed` | Seed material for the run (the run id). |
+| 13 | `latency_ms` | Wall-clock of the query (excludes the one-time build; see `init_ms` in runmeta). |
+| 14 | `measure_reads` | Total measure values gathered by row id (rows × measures): the I/O cost. |
+| 15 | `sampled_rows` | Distinct rows read by without-replacement sampling. |
+| 16 | `exactified_rows` | Distinct rows read by exhausting a stratum to exact (scan oracle: all qualifying rows). |
+| 17 | `frontier_partitions` | The partitions the answer is actually assembled from — where the top-down walk stops, one group per region that is wholly inside the query or a boundary remainder. Not the total number of partitions in the index, nor everything the walk inspected; the four columns below are its breakdown and sum to it. |
+| 18 | `partitions_refined` | How many boundary partitions were *cracked* for this query. |
+| 19 | `exact_contributors` | Wholly-inside partitions already known exactly from an earlier query (read in full before); contribute with **no reads**. The strongest form of reuse. |
+| 20 | `reusable_sampled_strata` | Wholly-inside partitions an earlier query *partially* sampled; the partial sample is reused and extended only if this query needs a tighter answer. Partial reuse. |
+| 21 | `reusable_absent_strata` | Wholly-inside partitions nothing is known about yet (just created, or never sampled); sampled from scratch. No reuse. Over a session a partition migrates absent → sampled → exact, which is why later queries get cheaper. |
+| 22 | `query_local_strata` | Boundary partitions the query only partially covers (not worth cracking further). Only the in-rectangle subset is used, and since that selection is specific to this rectangle, its samples are discarded afterward and cannot help a future query. Reuse does not apply here. |
+| 23 | `adaptive_rounds` | Number of sampling/exactify rounds the engine loop ran. |
+
+The four contributor counts (columns 19–22) are per **partition** (not per
+(partition, measure)) and **sum to `frontier_partitions`**. Two identities hold
+for every method and are checked by `validate_results.py`:
+
+- `measure_reads == (sampled_rows + exactified_rows) × num_measures`
+- `frontier_partitions == exact_contributors + reusable_sampled_strata + reusable_absent_strata + query_local_strata`
+
 - **JSON Columns:**
   - `query_rect`: `{ "lower": [...], "upper": [...] }`
   - `aggregates`: Array of `{ aggregate, measure, estimate, ci_low, ci_high, relative_half_width, effective_df, exact }`
-- **Manifest:** Each run writes a manifest JSON with configuration and environment details.
+- **Manifest:** Each run writes a sibling `runmeta_*.json` with the fully-resolved configuration and environment details.
 
 ## Axes and Cell Key
 

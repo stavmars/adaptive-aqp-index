@@ -90,8 +90,14 @@ struct DecompositionResult {
     ExactBucket        exact_bucket;
     std::uint64_t      total_count = 0;  // COUNT(*): all qualifying objects, incl. missing
     std::uint64_t      nodes_visited = 0;       // descent nodes classified (incl. dropped)
-    std::uint64_t      partitions_split = 0;     // parents retired by refinement during the descent
-    std::uint64_t      partitions_touched = 0;   // leaf-level partitions emitted as contributors/strata
+    std::uint64_t      partitions_refined = 0;   // boundary leaves cracked toward the query (>=1 cut each)
+    std::uint64_t      frontier_partitions = 0;  // leaf-level partitions emitted as contributors/strata
+    // Per-partition breakdown of the frontier; these four sum to
+    // `frontier_partitions`. Counted once per partition, never per measure.
+    std::uint64_t      exact_contributor_partitions = 0;  // complete (exact) prior summary
+    std::uint64_t      reusable_sampled_partitions  = 0;  // partial (sampled) prior summary
+    std::uint64_t      reusable_absent_partitions   = 0;  // no summary yet
+    std::uint64_t      query_local_partitions       = 0;  // boundary partition
 };
 
 }  // namespace a3i

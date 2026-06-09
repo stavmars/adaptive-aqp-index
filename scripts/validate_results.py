@@ -402,6 +402,33 @@ def validate_run(csv_path: Path, oracles: dict[int, Oracle],
                             "kind": "exact_consistency", "ok": False,
                             "note": f"status={status} but an aggregate is not exact"})
 
+        # Τhe read-work counters must obey their identity. Sampling and
+        # exactification read disjoint rows, every read touches every measure,
+        # so measure_reads == (sampled_rows + exactified_rows) * num_measures.
+        # A violation means the counters are wired wrong.
+        sampled = int(as_float(row.get("sampled_rows", 0)))
+        exactified = int(as_float(row.get("exactified_rows", 0)))
+        measure_reads = int(as_float(row.get("measure_reads", 0)))
+        if measure_reads != (sampled + exactified) * nm:
+            guard_fail += 1
+            details.append({"query_ordinal": ordinal, "aggregate": "", "measure": "",
+                            "kind": "read_counters", "ok": False,
+                            "note": (f"measure_reads={measure_reads} != "
+                                     f"(sampled={sampled}+exactified={exactified})*nm={nm}")})
+
+        # Gate: the per-partition frontier breakdown must sum to the frontier.
+        frontier = int(as_float(row.get("frontier_partitions", 0)))
+        breakdown = (int(as_float(row.get("exact_contributors", 0)))
+                     + int(as_float(row.get("reusable_sampled_strata", 0)))
+                     + int(as_float(row.get("reusable_absent_strata", 0)))
+                     + int(as_float(row.get("query_local_strata", 0))))
+        if frontier != breakdown:
+            guard_fail += 1
+            details.append({"query_ordinal": ordinal, "aggregate": "", "measure": "",
+                            "kind": "frontier_partitions", "ok": False,
+                            "note": (f"frontier_partitions={frontier} != "
+                                     f"sum of contributors={breakdown}")})
+
     summary = {
         "dataset": csv_path.parents[3].name,
         "workload": csv_path.parents[2].name,

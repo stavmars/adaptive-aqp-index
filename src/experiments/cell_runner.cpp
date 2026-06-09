@@ -35,9 +35,9 @@ constexpr const char* kHeader =
     "query_ordinal,method,substrate,dataset,workload,query_rect,aggregates,"
     "target_satisfied,status,exactify_cause,pre_exactification_error_bound,"
     "sampling_seed,latency_ms,measure_reads,sampled_rows,"
-    "exactified_rows,partitions_touched,partitions_split,exact_contributors,"
-    "reusable_strata,query_local_strata,query_local_exact_contributors,"
-    "summary_reuse_hits,adaptive_rounds";
+    "exactified_rows,frontier_partitions,partitions_refined,exact_contributors,"
+    "reusable_sampled_strata,reusable_absent_strata,query_local_strata,"
+    "adaptive_rounds";
 
 // Locale-independent, byte-stable, round-tripping double formatting.
 std::string fmt(double v) {
@@ -218,10 +218,10 @@ void write_row(std::ofstream& out, std::uint64_t ordinal, const std::string& met
         << m.exactify_cause << ',' << fmt(m.pre_exactification_error_bound) << ','
         << m.sampling_seed << ',' << fmt(m.latency_ms) << ','
         << m.measure_reads << ',' << m.sampled_rows << ','
-        << m.exactified_rows << ',' << m.partitions_touched << ',' << m.partitions_split
-        << ',' << m.exact_contributors << ',' << m.reusable_strata << ','
-        << m.query_local_strata << ',' << m.query_local_exact_contributors << ','
-        << m.summary_reuse_hits << ',' << m.adaptive_rounds << '\n';
+        << m.exactified_rows << ',' << m.frontier_partitions << ','
+        << m.partitions_refined << ',' << m.exact_contributors << ','
+        << m.reusable_sampled_strata << ',' << m.reusable_absent_strata << ','
+        << m.query_local_strata << ',' << m.adaptive_rounds << '\n';
 }
 
 // Distinct yet reproducible sampling seed material per (run, query). For run 0

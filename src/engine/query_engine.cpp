@@ -296,11 +296,12 @@ QueryResult QueryEngine::execute(const RangeQuery& query,
     DecompositionResult d = decompose_descent(
         query.predicate, access_path_, state_, table_, measure_count_,
         config_.persist_summaries, access_path_.supports_refine());
-    m.partitions_split = d.partitions_split;
-    m.partitions_touched = d.partitions_touched;
-    m.exact_contributors = d.decomposition.exact_contributors.size();
-    m.reusable_strata = d.decomposition.reusable_strata.size();
-    m.query_local_strata = d.decomposition.query_local_strata.size();
+    m.partitions_refined = d.partitions_refined;
+    m.frontier_partitions = d.frontier_partitions;
+    m.exact_contributors = d.exact_contributor_partitions;
+    m.reusable_sampled_strata = d.reusable_sampled_partitions;
+    m.reusable_absent_strata = d.reusable_absent_partitions;
+    m.query_local_strata = d.query_local_partitions;
 
     build_residual_partitions(d.decomposition);
 

@@ -32,9 +32,9 @@ EXPECTED_HEADER = (
     "query_ordinal,method,substrate,dataset,workload,query_rect,aggregates,"
     "target_satisfied,status,exactify_cause,pre_exactification_error_bound,"
     "sampling_seed,latency_ms,measure_reads,sampled_rows,"
-    "exactified_rows,partitions_touched,partitions_split,exact_contributors,"
-    "reusable_strata,query_local_strata,query_local_exact_contributors,"
-    "summary_reuse_hits,adaptive_rounds"
+    "exactified_rows,frontier_partitions,partitions_refined,exact_contributors,"
+    "reusable_sampled_strata,reusable_absent_strata,query_local_strata,"
+    "adaptive_rounds"
 ).split(",")
 
 # Runmeta stamps Layer 1 requires for a result file to be self-describing.
@@ -44,10 +44,9 @@ REQUIRED_RUNMETA = ("engine_build_version", "cold", "max_queries")
 
 # Per-query cost/work columns (constant across a query's aggregate/measure rows).
 COST_COLS = ("latency_ms", "measure_reads", "sampled_rows", "exactified_rows",
-             "partitions_touched", "partitions_split", "exact_contributors",
-             "reusable_strata", "query_local_strata",
-             "query_local_exact_contributors", "summary_reuse_hits",
-             "adaptive_rounds")
+             "frontier_partitions", "partitions_refined", "exact_contributors",
+             "reusable_sampled_strata", "reusable_absent_strata",
+             "query_local_strata", "adaptive_rounds")
 
 # Cell identity (one cell-run = one qresults file). `n` (query count) is part of
 # identity so runs with different `max_queries` are distinct cells, not pooled.

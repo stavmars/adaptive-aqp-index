@@ -88,6 +88,11 @@ QueryResult exact_scan(const BinaryColumnStore& store,
     metrics.status           = "exact";
     metrics.stop_reason      = "exact";
     metrics.measure_reads    = qualifying * static_cast<std::uint64_t>(k);
+    // The scan reads every qualifying row to exact completion; recording that
+    // as exactified rows keeps the cross-method identity
+    //   measure_reads == (sampled_rows + exactified_rows) * measure_count
+    // true for the oracle as well (it samples nothing).
+    metrics.exactified_rows  = qualifying;
     metrics.target_satisfied = true;
     return result;
 }

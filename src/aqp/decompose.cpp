@@ -33,12 +33,19 @@ struct Descender {
             result.exact_bucket.count_by_measure[mid] += s->non_nan.non_nan_count;
         }
         result.total_count += population;
-        ++result.partitions_touched;
+        ++result.frontier_partitions;
+        ++result.exact_contributor_partitions;
     }
 
     // A contained leaf without a complete summary: sample its whole range.
     void emit_reusable(PartitionId pid, const PartitionView& pv,
                        std::uint64_t population) {
+        // Classify by the prior summary state, captured before we (possibly)
+        // create a fresh summary below: a partition that an earlier query left
+        // partially sampled resumes that sample; one with no stored rows
+        // (freshly cracked or never sampled) starts from scratch.
+        const MeasureSummary* prior = store.find(pid, 0);
+        const bool sampled_before = prior != nullptr && prior->sampled_rows > 0;
         if (persist) {
             store.ensure_partition(pid, measure_count);
             for (std::size_t mid = 0; mid < measure_count; ++mid) {
@@ -58,7 +65,9 @@ struct Descender {
             }
         }
         result.total_count += population;
-        ++result.partitions_touched;
+        ++result.frontier_partitions;
+        if (sampled_before) ++result.reusable_sampled_partitions;
+        else                ++result.reusable_absent_partitions;
     }
 
     // A partial leaf: only the qualifying positions take part; the sample is
@@ -80,7 +89,8 @@ struct Descender {
                  qualifying_count});
         }
         result.total_count += qualifying_count;
-        ++result.partitions_touched;
+        ++result.frontier_partitions;
+        ++result.query_local_partitions;
     }
 
     void descend(PartitionId pid) {
@@ -125,7 +135,10 @@ struct Descender {
                         store.retire_partition(rid);
                     }
                 }
-                result.partitions_split += retired.size();
+                // Count this boundary leaf once if cracking actually split it;
+                // a refine that produced no cut (below threshold, or a cut
+                // plane outside the data) leaves it a leaf to be scanned below.
+                if (!retired.empty()) ++result.partitions_refined;
                 if (!ap.is_leaf(pid)) {
                     for (PartitionId ch : ap.children(pid)) descend(ch);
                     return;
