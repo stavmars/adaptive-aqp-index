@@ -52,7 +52,6 @@ add_library(a3i_core STATIC
     src/substrates/static_kd_access_path.cpp
     src/aqp/summary.cpp
     src/aqp/partition_state_store.cpp
-    src/aqp/prior_stats.cpp
     src/aqp/sampler.cpp
     src/aqp/stratum_cursor.cpp
     src/aqp/decompose.cpp

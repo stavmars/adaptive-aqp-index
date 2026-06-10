@@ -21,4 +21,11 @@ double normal_quantile(double p);
 /// Symmetric about zero; `nu` is clamped to at least 1.
 double t_quantile(double p, double nu);
 
+/// Inverse chi-squared CDF: the value x with P(X <= x) = p for `nu` degrees
+/// of freedom (nu >= 1, may be fractional), by the Wilson-Hilferty cube
+/// approximation. Accurate to about a percent for nu >= 10 -- ample for its
+/// consumer, the sampling planner's upper confidence bound on an observed
+/// stratum variance, where it enters only as a bounded inflation factor.
+double chi_squared_quantile(double p, double nu);
+
 }  // namespace a3i

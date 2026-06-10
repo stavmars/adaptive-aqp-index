@@ -105,9 +105,9 @@ struct Fixture {
 
     IndexTable make_table() const { return IndexTable::from_columns({xs, ys}); }
 
-    SubstrateConfig substrate() const {
+    SubstrateConfig substrate(std::uint32_t refinement_threshold = 16) const {
         SubstrateConfig cfg;
-        cfg.refinement_threshold = 16;
+        cfg.refinement_threshold = refinement_threshold;
         return cfg;
     }
 };
@@ -306,7 +306,9 @@ TEST(QueryEngine, ForceExactAllMissingMeasure) {
 TEST(QueryEngine, ApproximateLoopCertifiesIntervals) {
     Fixture f;
     IndexTable table = f.make_table();
-    AdaptiveKdAccessPath path(f.substrate());
+    // A large refinement threshold keeps the whole domain one stratum, so the
+    // loop genuinely samples instead of taking 400 tiny leaves whole.
+    AdaptiveKdAccessPath path(f.substrate(512));
     path.prepare(table);
     EngineConfig cfg;
     cfg.accuracy_mode = EngineConfig::AccuracyMode::PerQuery;
@@ -318,8 +320,11 @@ TEST(QueryEngine, ApproximateLoopCertifiesIntervals) {
     const QueryResult oracle = exact_scan(*f.store, f.schema, q);
 
     EXPECT_TRUE(got.metrics.target_satisfied);
+    EXPECT_GT(got.metrics.sampled_rows, 0u);  // the loop sampled, not read all
+    bool any_sampled_interval = false;
     for (const auto& e : got.aggregates) {
         if (e.exact) continue;
+        any_sampled_interval = true;
         EXPECT_LE(e.relative_half_width, rel) << static_cast<int>(e.op);
         EXPECT_LE(e.ci_low, e.estimate);
         EXPECT_LE(e.estimate, e.ci_high);
@@ -335,12 +340,39 @@ TEST(QueryEngine, ApproximateLoopCertifiesIntervals) {
         EXPECT_LE(std::abs(e.estimate - o.estimate), 4.0 * half_width)
             << "estimate far from truth for op " << static_cast<int>(e.op);
     }
+    EXPECT_TRUE(any_sampled_interval);
     const std::string& s = got.metrics.status;
     EXPECT_TRUE(s == "converged" || s == "exactified");
 
 }
 
-TEST(QueryEngine, TightTargetFallsBackToExact) {
+// A persisted sample is reused wholesale: re-running the identical query finds
+// every stratum's cumulative sample (and any full reads) already in the state
+// store, re-certifies the intervals from it, and reads nothing.
+TEST(QueryEngine, RepeatedQueryReusesThePersistedSample) {
+    Fixture f;
+    IndexTable table = f.make_table();
+    AdaptiveKdAccessPath path(f.substrate(512));
+    path.prepare(table);
+    EngineConfig cfg;
+    cfg.accuracy_mode = EngineConfig::AccuracyMode::PerQuery;
+    cfg.persist_summaries = true;
+    QueryEngine engine(*f.store, table, path, cfg);
+
+    const RangeQuery q = query(0.0, 20.0, 0.0, 20.0, /*rel=*/0.25);
+    const QueryResult first = engine.execute(q, 7);
+    EXPECT_TRUE(first.metrics.target_satisfied);
+    EXPECT_GT(first.metrics.measure_reads, 0u);
+
+    const QueryResult second = engine.execute(q, 8);
+    EXPECT_TRUE(second.metrics.target_satisfied);
+    EXPECT_EQ(second.metrics.measure_reads, 0u);
+}
+
+// An effectively-exact target degenerates cleanly: the plan saturates every
+// stratum to its full population, the answer matches the oracle, and the
+// work is accounted as full reads rather than sampling.
+TEST(QueryEngine, TightTargetReadsEverything) {
     Fixture f;
     IndexTable table = f.make_table();
     AdaptiveKdAccessPath path(f.substrate());
@@ -354,6 +386,7 @@ TEST(QueryEngine, TightTargetFallsBackToExact) {
     const QueryResult oracle = exact_scan(*f.store, f.schema, q);
 
     expect_matches_oracle(got, oracle);
-    EXPECT_EQ(got.metrics.status, "exactified");
-    EXPECT_NE(got.metrics.exactify_cause, "none");
+    EXPECT_GT(got.metrics.exactified_rows, 0u);
+    const std::string& s = got.metrics.status;
+    EXPECT_TRUE(s == "converged" || s == "exactified") << s;
 }

@@ -1,8 +1,11 @@
-// Neyman + FPC allocation: saturation, stability floor, variance-weighting,
-// monotone targets, and the loop's decision-point quantities.
+// Pilot-then-Neyman allocation: pilot targets, take-all of small strata,
+// variance-weighted allocation under an upper confidence bound, the
+// per-stratum finish rule, per-aggregate budgets (including AVG), and
+// monotone clamped targets.
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <vector>
 
 #include "a3i/aqp/allocator.hpp"
@@ -13,22 +16,18 @@ namespace {
 
 using namespace a3i;
 
-ExactBucket empty_bucket(std::size_t k) {
-    ExactBucket b;
-    b.sum_by_measure.assign(k, 0.0);
-    b.count_by_measure.assign(k, 0);
-    return b;
-}
-
-StratumAlloc one_measure(std::uint64_t N, std::uint64_t sampled, double p,
-                         double mu, double sigma) {
+// A stratum whose single measure has been sampled to the given state.
+StratumAlloc stratum(std::uint64_t N, std::uint64_t m, std::uint64_t n,
+                     double S, double Q) {
     StratumAlloc s;
     s.N = N;
-    s.sampled = sampled;
-    s.priors.push_back(StratumPrior{p, mu, sigma});
-    s.observed.push_back(StratumSample{N, sampled, 0, 0.0, 0.0});
+    s.sampled = m;
+    s.observed.push_back(StratumSample{N, m, n, S, Q});
     return s;
 }
+
+// A fresh stratum with no samples yet.
+StratumAlloc fresh(std::uint64_t N) { return stratum(N, 0, 0, 0.0, 0.0); }
 
 AccuracyTarget target(double rel) {
     AccuracyTarget t;
@@ -37,76 +36,186 @@ AccuracyTarget target(double rel) {
     return t;
 }
 
-TEST(Allocator, LooseTargetSamplesNearStabilityFloor) {
-    Allocator alloc;
-    std::vector<StratumAlloc> strata = {one_measure(100000, 0, 1.0, 1.0, 1.0)};
-    auto plan = alloc.plan_initial(strata, empty_bucket(1), target(0.5), 1.0);
-    EXPECT_GT(plan.target[0], 10u);       // above the floor
-    EXPECT_LT(plan.target[0], 100000u);   // far below exact
+AggregateEstimate make_estimate(AggregateOp op, MeasureId mid, double value) {
+    AggregateEstimate e;
+    e.op = op;
+    e.measure_id = mid;
+    e.estimate = value;
+    return e;
+}
+
+// Current SUM / COUNT / AVG estimates for a single-measure query.
+std::vector<AggregateEstimate> estimates(double sum, double count) {
+    return {make_estimate(AggregateOp::Sum, 0, sum),
+            make_estimate(AggregateOp::CountMeasure, 0, count),
+            make_estimate(AggregateOp::Avg, 0, count > 0 ? sum / count : 0.0)};
+}
+
+// --- Pilot plan ------------------------------------------------------------
+
+TEST(AllocatorPilot, DrawsThePilotSizePerStratum) {
+    Allocator alloc;  // pilot_sample_size = 32
+    std::vector<StratumAlloc> strata = {fresh(1000), fresh(500000)};
+    auto plan = alloc.plan_pilot(strata);
+    EXPECT_EQ(plan.target[0], 32u);
+    EXPECT_EQ(plan.target[1], 32u);
     EXPECT_FALSE(plan.no_target_increase);
 }
 
-TEST(Allocator, TightTargetSaturatesToExact) {
+TEST(AllocatorPilot, TakesSmallStrataWhole) {
     Allocator alloc;
-    std::vector<StratumAlloc> strata = {one_measure(100000, 0, 1.0, 1.0, 1.0)};
-    auto plan = alloc.plan_initial(strata, empty_bucket(1), target(1e-6), 1.0);
-    EXPECT_EQ(plan.target[0], 100000u);  // budget over-samples -> read all
+    // A stratum at or below twice the pilot size is cheaper to read outright
+    // than to pilot, plan, and sample in pieces.
+    std::vector<StratumAlloc> strata = {fresh(50), fresh(64), fresh(65)};
+    auto plan = alloc.plan_pilot(strata);
+    EXPECT_EQ(plan.target[0], 50u);
+    EXPECT_EQ(plan.target[1], 64u);
+    EXPECT_EQ(plan.target[2], 32u);
 }
 
-TEST(Allocator, HigherVarianceStratumGetsMoreSamples) {
+TEST(AllocatorPilot, ReusedSamplesAlreadyCoverThePilot) {
     Allocator alloc;
+    // A stratum that arrives with enough persisted samples needs no pilot
+    // reads at all; one below the pilot size is only topped up.
+    std::vector<StratumAlloc> strata = {stratum(1000, 40, 40, 40.0, 40.0),
+                                        stratum(1000, 10, 10, 10.0, 10.0)};
+    auto plan = alloc.plan_pilot(strata);
+    EXPECT_EQ(plan.target[0], 40u);  // unchanged: no new reads
+    EXPECT_EQ(plan.target[1], 32u);  // topped up to the pilot size
+    EXPECT_EQ(plan.planned_new_reads, 22u);
+}
+
+// --- Neyman plan from observed statistics -----------------------------------
+
+// Two strata with identical population and sample size; the one whose sample
+// shows more spread gets the larger target.
+TEST(Allocator, HigherObservedVarianceGetsMoreSamples) {
+    Allocator alloc;
+    // A: values tightly around 10 (Q just above S^2/m). B: values 0 or 20.
     std::vector<StratumAlloc> strata = {
-        one_measure(10000, 0, 1.0, 1.0, 1.0),
-        one_measure(10000, 0, 1.0, 1.0, 10.0)};
-    auto plan = alloc.plan_initial(strata, empty_bucket(1), target(0.05), 1.0);
+        stratum(100000, 100, 100, 1000.0, 10100.0),
+        stratum(100000, 100, 100, 1000.0, 20000.0)};
+    auto plan = alloc.plan(strata, estimates(2.0e6, 200000), target(0.05), 10.0);
     EXPECT_GT(plan.target[1], plan.target[0]);
 }
 
-TEST(Allocator, SmallStratumIsExactifiedByFloor) {
-    Allocator alloc;  // floor 10 > N
-    std::vector<StratumAlloc> strata = {one_measure(5, 0, 1.0, 1.0, 1.0)};
-    auto plan = alloc.plan_initial(strata, empty_bucket(1), target(0.1), 1.0);
-    EXPECT_EQ(plan.target[0], 5u);  // min(floor, N) == N
+TEST(Allocator, TightTargetSaturatesToTakeAll) {
+    Allocator alloc;
+    std::vector<StratumAlloc> strata = {stratum(100000, 100, 100, 1000.0, 20000.0)};
+    auto plan = alloc.plan(strata, estimates(1.0e6, 100000), target(1e-6), 10.0);
+    EXPECT_EQ(plan.target[0], 100000u);
 }
 
-TEST(Allocator, PlanSummaryReportsResidualAndNewReads) {
+// Every planned target either stays within the per-stratum finish fraction of
+// the stratum's remaining rows or jumps to the full population: a plan never
+// schedules a sampling round that reads most of a stratum yet leaves a
+// remnant unread.
+TEST(Allocator, FinishRuleLeavesNoNearlyFullStratum) {
+    Allocator alloc;  // exactification_sample_fraction = 0.5
+    for (double rel : {0.20, 0.10, 0.05, 0.02, 0.01}) {
+        std::vector<StratumAlloc> strata = {
+            stratum(2000, 600, 600, 6000.0, 80000.0),
+            stratum(100000, 100, 100, 1000.0, 20000.0)};
+        auto plan = alloc.plan(strata, estimates(1.1e6, 102000), target(rel), 10.0);
+        for (std::size_t h = 0; h < strata.size(); ++h) {
+            const std::uint64_t s = strata[h].sampled;
+            const std::uint64_t remaining = strata[h].N - s;
+            const std::uint64_t delta = plan.target[h] - s;
+            const bool within = static_cast<double>(delta) <= 0.5 * remaining;
+            const bool full = plan.target[h] == strata[h].N;
+            EXPECT_TRUE(within || full)
+                << "rel " << rel << " stratum " << h << " target "
+                << plan.target[h];
+        }
+    }
+}
+
+// The variance upper bound shrinks with the sample size: with identical
+// observed per-value statistics, the stratum that estimated them from fewer
+// samples is planned more conservatively (a larger target).
+TEST(Allocator, SmallerSampleGetsTheWiderVarianceBound) {
     Allocator alloc;
+    // Both strata: half the values 5, half 15 (mean 10, variance ~25).
+    auto obs = [](std::uint64_t m) {
+        const double S = 10.0 * static_cast<double>(m);
+        const double Q = 125.0 * static_cast<double>(m);
+        return StratumSample{100000, m, m, S, Q};
+    };
+    std::vector<StratumAlloc> strata = {stratum(100000, 32, 32, 0, 0),
+                                        stratum(100000, 128, 128, 0, 0)};
+    strata[0].observed[0] = obs(32);
+    strata[1].observed[0] = obs(128);
+    auto plan = alloc.plan(strata, estimates(2.0e6, 200000), target(0.05), 10.0);
+    EXPECT_GT(plan.target[0], strata[0].sampled);
+    EXPECT_GT(plan.target[1], strata[1].sampled);
+    EXPECT_GT(plan.target[0], plan.target[1]);
+}
+
+// All-present samples must not let the COUNT(measure) budget collapse: the
+// planner uses the same boundary-adjusted presence rate as the estimator, so
+// when COUNT still has a wide interval the plan keeps making progress instead
+// of reporting none (which would force a needless full read).
+TEST(Allocator, AllPresentSampleStillPlansForCount) {
+    Allocator alloc;
+    // Constant present values: the SUM variance is zero, so any progress can
+    // only come from the COUNT budget.
+    const double S = 7.0 * 32, Q = 49.0 * 32;
+    std::vector<StratumAlloc> strata = {stratum(100000, 32, 32, S, Q)};
+    auto plan = alloc.plan(strata, estimates(700000, 100000), target(0.01), 7.0);
+    EXPECT_FALSE(plan.no_target_increase);
+    EXPECT_GT(plan.target[0], 32u);
+    EXPECT_LT(plan.target[0], 100000u);  // sampling, not a forced full read
+}
+
+// AVG can be the only failing aggregate when strata of opposite-signed means
+// partially cancel in the SUM: the ratio's relative variance then exceeds both
+// components'. The plan must allocate for AVG directly and make progress
+// (the old behavior planned only SUM and COUNT, found both satisfied, and
+// stalled into reading every stratum in full).
+TEST(Allocator, AvgOnlyFailureStillMakesProgress) {
+    Allocator alloc;
+    // A: 100k rows, constant +10, all present. B: 20k rows, constant -8,
+    // present half the time. SUM and COUNT intervals at rel 0.02 pass;
+    // AVG's does not (relative half-widths ~0.012 / 0.017 / 0.027).
     std::vector<StratumAlloc> strata = {
-        one_measure(1000, 0, 1.0, 1.0, 1.0),
-        one_measure(2000, 0, 1.0, 1.0, 1.0)};
-    auto plan = alloc.plan_initial(strata, empty_bucket(1), target(0.1), 1.0);
-    EXPECT_EQ(plan.remaining_residual, 3000u);
-    std::uint64_t expected = plan.target[0] + plan.target[1];  // sampled == 0
-    EXPECT_EQ(plan.planned_new_reads, expected);
+        stratum(100000, 200, 200, 2000.0, 20000.0),
+        stratum(20000, 200, 100, -800.0, 6400.0)};
+    const double t_sum = 100000.0 * 10.0 - 20000.0 * 0.5 * 8.0;  // 920000
+    const double t_count = 100000.0 + 10000.0;
+    auto plan = alloc.plan(strata, estimates(t_sum, t_count), target(0.02), 10.0);
+    EXPECT_FALSE(plan.no_target_increase);
+    // The AVG noise lives entirely in stratum B; stratum A's constant values
+    // contribute nothing, so the plan must not grow A.
+    EXPECT_EQ(plan.target[0], strata[0].sampled);
+    EXPECT_GT(plan.target[1], strata[1].sampled);
 }
 
-TEST(Allocator, ExactifyIfCheaperFractionExceedsHalf) {
+TEST(Allocator, TargetsAreMonotoneAndClamped) {
     Allocator alloc;
-    // A small, high-variance stratum whose tight target reads most of it.
-    std::vector<StratumAlloc> strata = {one_measure(40, 0, 1.0, 1.0, 100.0)};
-    auto plan = alloc.plan_initial(strata, empty_bucket(1), target(0.01), 1.0);
-    EXPECT_GT(plan.next_round_reads_fraction(), 0.5);
+    std::vector<StratumAlloc> strata = {stratum(10000, 50, 50, 500.0, 5050.0)};
+    auto plan = alloc.plan(strata, estimates(100000, 10000), target(0.5), 10.0);
+    EXPECT_GE(plan.target[0], 50u);
+    EXPECT_LE(plan.target[0], 10000u);
 }
 
-TEST(Allocator, AdaptiveTargetsAreMonotone) {
+TEST(Allocator, SatisfiedBudgetsPlanNoReads) {
     Allocator alloc;
-    std::vector<StratumAlloc> strata = {one_measure(10000, 50, 1.0, 1.0, 1.0)};
-    // Observed: 50 sampled, low variance -> plain Neyman would ask for few.
-    strata[0].observed[0] = StratumSample{10000, 50, 50, 50.0, 80.0};
-    std::vector<AggregateEstimate> estimates;  // empty -> tiny anticipated totals
-    auto plan = alloc.plan_adaptive(strata, estimates, target(0.5), 1.0);
-    EXPECT_GE(plan.target[0], 50u);  // never below the current sample count
-}
-
-TEST(Allocator, AdaptiveNoProgressIsReported) {
-    Allocator alloc;
-    // Already sampled to the floor with negligible variance and a loose
-    // target: the planner cannot justify more reads.
-    std::vector<StratumAlloc> strata = {one_measure(10000, 10, 1.0, 1.0, 0.0)};
-    strata[0].observed[0] = StratumSample{10000, 10, 10, 10.0, 10.0};
-    std::vector<AggregateEstimate> estimates;
-    auto plan = alloc.plan_adaptive(strata, estimates, target(0.5), 1.0);
+    // A large, thoroughly sampled, low-variance stratum under a loose target:
+    // every budget is already met, so the plan holds (the loop only consults
+    // the plan when some aggregate still fails).
+    std::vector<StratumAlloc> strata = {
+        stratum(100000, 5000, 5000, 50000.0, 505000.0)};
+    auto plan = alloc.plan(strata, estimates(1.0e6, 100000), target(0.5), 10.0);
     EXPECT_TRUE(plan.no_target_increase);
+    EXPECT_EQ(plan.target[0], 5000u);
+}
+
+TEST(Allocator, PlanReportsResidualAndNewReads) {
+    Allocator alloc;
+    std::vector<StratumAlloc> strata = {fresh(1000), fresh(2000)};
+    auto plan = alloc.plan_pilot(strata);
+    EXPECT_EQ(plan.remaining_residual, 3000u);
+    EXPECT_EQ(plan.planned_new_reads, plan.target[0] + plan.target[1]);
 }
 
 }  // namespace

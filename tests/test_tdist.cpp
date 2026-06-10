@@ -54,4 +54,29 @@ TEST(TQuantile, FractionalDegreesOfFreedom) {
     EXPECT_GT(v, t_quantile(0.975, 8.0));
 }
 
+TEST(ChiSquaredQuantile, TableValues) {
+    // Wilson-Hilferty is accurate to about a percent for nu >= 10 and a few
+    // percent at nu = 5 -- ample for its one consumer, the planner's variance
+    // upper bound, where the quantile enters as a bounded inflation factor.
+    EXPECT_NEAR(chi_squared_quantile(0.05, 10.0), 3.940, 0.05);
+    EXPECT_NEAR(chi_squared_quantile(0.95, 10.0), 18.307, 0.20);
+    EXPECT_NEAR(chi_squared_quantile(0.05, 31.0), 19.281, 0.20);
+    EXPECT_NEAR(chi_squared_quantile(0.95, 31.0), 44.985, 0.45);
+    EXPECT_NEAR(chi_squared_quantile(0.05, 63.0), 45.741, 0.45);
+    EXPECT_NEAR(chi_squared_quantile(0.50, 5.0), 4.351, 0.15);
+}
+
+TEST(ChiSquaredQuantile, MonotoneInProbabilityAndDf) {
+    EXPECT_LT(chi_squared_quantile(0.05, 20.0), chi_squared_quantile(0.5, 20.0));
+    EXPECT_LT(chi_squared_quantile(0.5, 20.0), chi_squared_quantile(0.95, 20.0));
+    EXPECT_LT(chi_squared_quantile(0.05, 10.0), chi_squared_quantile(0.05, 40.0));
+    // Always strictly positive, even at small df and small p.
+    EXPECT_GT(chi_squared_quantile(0.05, 1.0), 0.0);
+}
+
+TEST(ChiSquaredQuantile, LargeDfNearMean) {
+    // The chi-squared mean is nu; the median approaches it for large nu.
+    EXPECT_NEAR(chi_squared_quantile(0.5, 1000.0), 1000.0, 2.0);
+}
+
 }  // namespace

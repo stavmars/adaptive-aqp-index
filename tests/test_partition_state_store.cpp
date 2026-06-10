@@ -4,7 +4,6 @@
 #include <vector>
 
 #include "a3i/aqp/partition_state_store.hpp"
-#include "a3i/aqp/prior_stats.hpp"
 #include "a3i/aqp/summary.hpp"
 #include "a3i/storage/manifest.hpp"
 
@@ -119,70 +118,3 @@ TEST(PartitionStateStore, EnsurePartitionGrowsStorage) {
     EXPECT_EQ(s.population_size, 8u);
 }
 
-// ---- PriorStatsProvider --------------------------------------------------
-
-TEST(PriorStatsProvider, PrefersOwnCompleteSummary) {
-    PartitionStateStore store;
-    const PartitionId p = store.register_partition(kMeasures);
-    MeasureSummary complete;
-    complete.population_size = 3;
-    complete.sampled_rows = 3;
-    complete.non_nan.add_if_present(1.0);
-    store.replace_with_complete(p, 0, complete);
-
-    std::vector<GlobalMeasureStats> globals(kMeasures);
-    PriorStatsProvider prior(
-        store, [](PartitionId) { return std::optional<PartitionId>{}; }, globals);
-
-    EXPECT_NE(prior.complete_partition_summary(p, 0), nullptr);
-    // A sampled-but-incomplete summary is not "complete".
-    store.get_or_create(p, 1, 10).sampled_rows = 2;
-    EXPECT_EQ(prior.complete_partition_summary(p, 1), nullptr);
-}
-
-TEST(PriorStatsProvider, WalksToNearestRetainedExactAncestor) {
-    // Chain: child(2) -> mid(1) -> root(0). Root is exact for measure 0.
-    PartitionStateStore store;
-    store.register_partition(kMeasures);  // 0 root
-    store.register_partition(kMeasures);  // 1 mid
-    store.register_partition(kMeasures);  // 2 child
-
-    MeasureSummary exact;
-    exact.population_size = 5;
-    exact.sampled_rows = 5;
-    exact.non_nan.add_if_present(9.0);
-    store.replace_with_complete(0, 0, exact);
-    store.retire_partition(0);
-    store.retire_partition(1);
-
-    auto parent_of = [](PartitionId id) -> std::optional<PartitionId> {
-        if (id == 2) return PartitionId{1};
-        if (id == 1) return PartitionId{0};
-        return std::nullopt;  // root
-    };
-    std::vector<GlobalMeasureStats> globals(kMeasures);
-    PriorStatsProvider prior(store, parent_of, globals);
-
-    const MeasureSummary* anc = prior.nearest_retained_exact_ancestor(2, 0);
-    ASSERT_NE(anc, nullptr);
-    EXPECT_NEAR(anc->non_nan.sum(), 9.0, 1e-12);
-
-    // No ancestor is exact for measure 1.
-    EXPECT_EQ(prior.nearest_retained_exact_ancestor(2, 1), nullptr);
-}
-
-TEST(PriorStatsProvider, FallsBackToGlobalStats) {
-    PartitionStateStore store;
-    store.register_partition(kMeasures);
-
-    std::vector<GlobalMeasureStats> globals(kMeasures);
-    globals[0].non_nan_count = 1000;
-    globals[0].sum = 5000.0;
-    globals[1].sum = -1.0;
-
-    PriorStatsProvider prior(
-        store, [](PartitionId) { return std::optional<PartitionId>{}; }, globals);
-    EXPECT_EQ(prior.global_measure_stats(0).non_nan_count, 1000u);
-    EXPECT_DOUBLE_EQ(prior.global_measure_stats(0).sum, 5000.0);
-    EXPECT_THROW(prior.global_measure_stats(9), std::out_of_range);
-}

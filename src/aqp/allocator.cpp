@@ -5,48 +5,65 @@
 #include <cstddef>
 #include <vector>
 
+#include "a3i/util/tdist.hpp"
+
 namespace a3i {
 
 namespace {
 
 constexpr double kMagnitudeFloorDelta = 1e-6;
-constexpr double kPlanZ = 1.959963984540054;  // plan with 1.96, report with t
 
-// Per (stratum, measure) inputs to the closed-form allocation.
-struct Eff {
-    double sh_sum = 0.0;        // prior/observed stdev of the null-as-zero value
-    double sh_count = 0.0;      // prior/observed stdev of the presence indicator
-    double contrib_sum = 0.0;   // anticipated SUM contribution (N * p * mu)
-    double contrib_count = 0.0; // anticipated COUNT contribution (N * p)
+// Multiply an observed variance by this factor to get its one-sided upper
+// confidence bound: (m-1) s^2 / chi^2_{delta, m-1} bounds the true variance
+// from above with probability 1-delta under approximate normality. Capped so
+// a freak tiny-sample draw cannot explode a plan; for the pilot sizes the
+// planner guarantees (>= 32 samples) the factor sits around 1.6 and decays
+// toward 1 as the sample grows.
+double variance_bound_factor(std::uint64_t m, double delta) {
+    if (m < 2) return 1.0;
+    const double nu = static_cast<double>(m - 1);
+    const double f = nu / chi_squared_quantile(delta, nu);
+    return std::min(std::max(f, 1.0), 4.0);
+}
+
+// Per (stratum, measure) standard deviations entering the three budgets.
+struct Spread {
+    double sh_sum = 0.0;  // null-as-zero value
+    double sh_count = 0.0;  // presence indicator
+    double sh_avg = 0.0;  // ratio-linearized residual z - mu * c
 };
 
-Eff eff_from_prior(std::uint64_t N, const StratumPrior& pr) {
-    Eff e;
-    const double p = pr.p;
-    e.sh_sum = std::sqrt(std::max(
-        0.0, p * pr.sigma_nn * pr.sigma_nn + p * (1.0 - p) * pr.mu_nn * pr.mu_nn));
-    e.sh_count = std::sqrt(std::max(0.0, p * (1.0 - p)));
-    e.contrib_sum = static_cast<double>(N) * p * pr.mu_nn;
-    e.contrib_count = static_cast<double>(N) * p;
-    return e;
-}
+// Observed spreads under the variance upper bound. `mu` is the current AVG
+// estimate for this measure (NaN when undefined); the residual variance for
+// the AVG budget linearizes the ratio at it.
+Spread spread_from_observed(const StratumSample& s, double mu, double delta) {
+    Spread out;
+    if (s.m < 2 || s.m >= s.N) return out;  // nothing to plan, or already exact
 
-Eff eff_from_observed(const StratumSample& s) {
-    Eff e;
     const double m = static_cast<double>(s.m);
     const double n = static_cast<double>(s.n);
-    const double p = n / m;
+    const double bound = variance_bound_factor(s.m, delta);
+
     double s2z = (s.Q - s.S * s.S / m) / (m - 1.0);
     if (s2z < 0.0) s2z = 0.0;
-    e.sh_sum = std::sqrt(s2z);
-    e.sh_count = std::sqrt(std::max(0.0, p * (1.0 - p)));
-    e.contrib_sum = static_cast<double>(s.N) * s.S / m;
-    e.contrib_count = static_cast<double>(s.N) * p;
-    return e;
+    out.sh_sum = std::sqrt(s2z * bound);
+
+    const double p_adj = presence_rate_for_variance(s.n, s.m);
+    out.sh_count = std::sqrt(std::max(0.0, p_adj * (1.0 - p_adj)));
+
+    if (std::isfinite(mu)) {
+        const double sum_e = s.S - mu * n;                       // sum of residuals
+        const double sum_e2 = s.Q - 2.0 * mu * s.S + mu * mu * n;  // their squares
+        double s2e = (sum_e2 - sum_e * sum_e / m) / (m - 1.0);
+        if (s2e < 0.0) s2e = 0.0;
+        out.sh_avg = std::sqrt(s2e * bound);
+    }
+    return out;
 }
 
-// Closed-form Neyman+FPC sample sizes for a single aggregate under a variance
-// budget V*, iterated so strata the budget would over-sample saturate to N_h.
+// Closed-form Neyman+FPC sample sizes for one aggregate under a variance
+// budget V*, iterated so strata the budget would over-sample saturate to N_h
+// (the take-all strata of survey practice) and the rest re-solve.
 std::vector<std::uint64_t> neyman_alloc(const std::vector<std::uint64_t>& N,
                                         const std::vector<double>& sh,
                                         double v_star) {
@@ -85,67 +102,19 @@ std::vector<std::uint64_t> neyman_alloc(const std::vector<std::uint64_t>& N,
 
 }  // namespace
 
-AllocationPlan Allocator::plan_initial(const std::vector<StratumAlloc>& strata,
-                                       const ExactBucket& exact_bucket,
-                                       const AccuracyTarget& target,
-                                       double global_mean_abs) const {
-    const std::size_t H = strata.size();
-    const std::size_t k = H == 0 ? 0 : strata[0].priors.size();
-
-    std::vector<std::uint64_t> N(H);
-    std::uint64_t sum_population = 0;
-    for (std::size_t h = 0; h < H; ++h) {
-        N[h] = strata[h].N;
-        sum_population += strata[h].N;
-    }
-    const double tau_sum =
-        kMagnitudeFloorDelta * global_mean_abs * static_cast<double>(sum_population);
-    const double tau_count =
-        std::max(1.0, kMagnitudeFloorDelta * static_cast<double>(sum_population));
-
-    std::vector<std::uint64_t> target_n(H, 0);
-    const double rel = target.relative_error;
-
-    for (std::size_t mid = 0; mid < k; ++mid) {
-        std::vector<double> sh_sum(H), sh_count(H);
-        double t_sum = mid < exact_bucket.sum_by_measure.size()
-                           ? exact_bucket.sum_by_measure[mid]
-                           : 0.0;
-        double t_count = mid < exact_bucket.count_by_measure.size()
-                             ? static_cast<double>(exact_bucket.count_by_measure[mid])
-                             : 0.0;
-        for (std::size_t h = 0; h < H; ++h) {
-            const Eff e = eff_from_prior(strata[h].N, strata[h].priors[mid]);
-            sh_sum[h] = e.sh_sum;
-            sh_count[h] = e.sh_count;
-            t_sum += e.contrib_sum;
-            t_count += e.contrib_count;
-        }
-        const double t_ant_sum = std::max(std::abs(t_sum), tau_sum);
-        const double t_ant_count = std::max(t_count, tau_count);
-        const double v_sum =
-            rel > 0.0 ? std::pow(rel * t_ant_sum / kPlanZ, 2.0) : 0.0;
-        const double v_count =
-            rel > 0.0 ? std::pow(rel * t_ant_count / kPlanZ, 2.0) : 0.0;
-
-        const auto n_sum = neyman_alloc(N, sh_sum, v_sum);
-        const auto n_count = neyman_alloc(N, sh_count, v_count);
-        for (std::size_t h = 0; h < H; ++h) {
-            target_n[h] = std::max({target_n[h], n_sum[h], n_count[h]});
-        }
-    }
-
+AllocationPlan Allocator::plan_pilot(
+    const std::vector<StratumAlloc>& strata) const {
+    const std::uint64_t m0 = cfg_.pilot_sample_size;
     AllocationPlan plan;
-    plan.target.resize(H);
-    for (std::size_t h = 0; h < H; ++h) {
-        std::uint64_t t = target_n[h];
-        // Stability floor: every non-empty stratum reaches the floor or is
-        // exactified when it has fewer eligible rows than the floor.
-        t = std::max(t, std::min(cfg_.stability_sample_floor, strata[h].N));
-        t = std::min(t, strata[h].N);
-        t = std::max(t, strata[h].sampled);
+    plan.target.resize(strata.size());
+    for (std::size_t h = 0; h < strata.size(); ++h) {
+        const std::uint64_t N = strata[h].N;
+        // Piloting a stratum one could nearly read outright is wasted
+        // bookkeeping; at or below twice the pilot size, take it whole.
+        std::uint64_t t = N <= 2 * m0 ? N : m0;
+        t = std::max(t, strata[h].sampled);  // persisted samples already count
         plan.target[h] = t;
-        plan.remaining_residual += strata[h].N - strata[h].sampled;
+        plan.remaining_residual += N - strata[h].sampled;
         if (t > strata[h].sampled) {
             plan.planned_new_reads += t - strata[h].sampled;
             plan.no_target_increase = false;
@@ -154,10 +123,10 @@ AllocationPlan Allocator::plan_initial(const std::vector<StratumAlloc>& strata,
     return plan;
 }
 
-AllocationPlan Allocator::plan_adaptive(
-    const std::vector<StratumAlloc>& strata,
-    const std::vector<AggregateEstimate>& estimates,
-    const AccuracyTarget& target, double global_mean_abs) const {
+AllocationPlan Allocator::plan(const std::vector<StratumAlloc>& strata,
+                               const std::vector<AggregateEstimate>& estimates,
+                               const AccuracyTarget& target,
+                               double global_mean_abs) const {
     const std::size_t H = strata.size();
     const std::size_t k = H == 0 ? 0 : strata[0].observed.size();
 
@@ -167,12 +136,14 @@ AllocationPlan Allocator::plan_adaptive(
         N[h] = strata[h].N;
         sum_population += strata[h].N;
     }
-    const double tau_sum =
-        kMagnitudeFloorDelta * global_mean_abs * static_cast<double>(sum_population);
+    // Magnitude floors guard the budgets when an estimate is numerically
+    // tiny, exactly as the estimator floors its relative half-widths.
+    const double tau_sum = kMagnitudeFloorDelta * global_mean_abs *
+                           static_cast<double>(sum_population);
     const double tau_count =
         std::max(1.0, kMagnitudeFloorDelta * static_cast<double>(sum_population));
+    const double tau_avg = kMagnitudeFloorDelta * global_mean_abs;
 
-    // Index the current estimates by (op, measure) for the anticipated totals.
     auto estimate_for = [&](AggregateOp op, MeasureId mid) -> double {
         for (const AggregateEstimate& e : estimates) {
             if (e.op == op && e.measure_id == mid) return e.estimate;
@@ -180,51 +151,89 @@ AllocationPlan Allocator::plan_adaptive(
         return 0.0;
     };
 
-    std::vector<std::uint64_t> target_n(H, 0);
+    // Budgets are scaled with the same critical value at which the interval
+    // will be judged in the common many-strata regime; the variance upper
+    // bound absorbs the small-sample gap between this and the Student-t the
+    // estimator reports with.
+    const double z = normal_quantile(0.5 + 0.5 * target.confidence);
     const double rel = target.relative_error;
+    // The variance bound's failure probability is one third of the
+    // complementary confidence (0.95 -> ~0.017), so planning caution scales
+    // with the requested confidence instead of adding a separate constant:
+    // the budget's allowed failure splits evenly over the bound on each
+    // moment and the interval itself.
+    const double delta = (1.0 - target.confidence) / 3.0;
 
+    std::vector<std::uint64_t> target_n(H, 0);
     for (std::size_t mid = 0; mid < k; ++mid) {
-        std::vector<double> sh_sum(H), sh_count(H);
+        const auto measure = static_cast<MeasureId>(mid);
+        const double mu = estimate_for(AggregateOp::Avg, measure);
+
+        std::vector<double> sh_sum(H), sh_count(H), sh_avg(H);
         for (std::size_t h = 0; h < H; ++h) {
-            const StratumSample& obs = strata[h].observed[mid];
-            const Eff e = obs.m >= 2
-                              ? eff_from_observed(obs)
-                              : (mid < strata[h].priors.size()
-                                     ? eff_from_prior(strata[h].N,
-                                                      strata[h].priors[mid])
-                                     : Eff{});
-            sh_sum[h] = e.sh_sum;
-            sh_count[h] = e.sh_count;
+            const Spread sp = spread_from_observed(strata[h].observed[mid], mu,
+                                                   delta);
+            sh_sum[h] = sp.sh_sum;
+            sh_count[h] = sp.sh_count;
+            sh_avg[h] = sp.sh_avg;
+            // A stratum somehow still below two samples cannot be planned
+            // from its own statistics; demand its pilot before anything else.
+            const auto& obs = strata[h].observed[mid];
+            if (obs.m < 2 && obs.N > 0) {
+                const std::uint64_t m0 = cfg_.pilot_sample_size;
+                target_n[h] = std::max(
+                    target_n[h], obs.N <= 2 * m0 ? obs.N : m0);
+            }
         }
-        const double t_ant_sum = std::max(
-            std::abs(estimate_for(AggregateOp::Sum, static_cast<MeasureId>(mid))),
-            tau_sum);
-        const double t_ant_count =
-            std::max(std::abs(estimate_for(AggregateOp::CountMeasure,
-                                           static_cast<MeasureId>(mid))),
-                     tau_count);
+
+        const double t_sum = std::max(
+            std::abs(estimate_for(AggregateOp::Sum, measure)), tau_sum);
+        const double t_count = std::max(
+            std::abs(estimate_for(AggregateOp::CountMeasure, measure)),
+            tau_count);
         const double v_sum =
-            rel > 0.0 ? std::pow(rel * t_ant_sum / kPlanZ, 2.0) : 0.0;
+            rel > 0.0 ? std::pow(rel * t_sum / z, 2.0) : 0.0;
         const double v_count =
-            rel > 0.0 ? std::pow(rel * t_ant_count / kPlanZ, 2.0) : 0.0;
+            rel > 0.0 ? std::pow(rel * t_count / z, 2.0) : 0.0;
 
         const auto n_sum = neyman_alloc(N, sh_sum, v_sum);
         const auto n_count = neyman_alloc(N, sh_count, v_count);
         for (std::size_t h = 0; h < H; ++h) {
             target_n[h] = std::max({target_n[h], n_sum[h], n_count[h]});
         }
+
+        // AVG budget: Var(mu_hat) = (1/T_count^2) sum_h N_h^2 (1-f_h)
+        // s_e,h^2 / m_h, so allocating the residual spreads under the budget
+        // (rel |mu| / z)^2 * T_count^2 bounds the AVG interval directly.
+        const double t_count_raw =
+            estimate_for(AggregateOp::CountMeasure, measure);
+        if (rel > 0.0 && std::isfinite(mu) && t_count_raw > 0.0) {
+            const double half = rel * std::max(std::abs(mu), tau_avg) / z;
+            const double v_avg = half * half * t_count_raw * t_count_raw;
+            const auto n_avg = neyman_alloc(N, sh_avg, v_avg);
+            for (std::size_t h = 0; h < H; ++h) {
+                target_n[h] = std::max(target_n[h], n_avg[h]);
+            }
+        }
     }
 
     AllocationPlan plan;
     plan.target.resize(H);
     for (std::size_t h = 0; h < H; ++h) {
-        std::uint64_t t = target_n[h];
-        t = std::max(t, std::min(cfg_.stability_sample_floor, strata[h].N));
-        t = std::min(t, strata[h].N);
-        // Monotone: never below the previous sample count.
-        t = std::max(t, strata[h].sampled);
+        std::uint64_t t = std::min(target_n[h], strata[h].N);
+        t = std::max(t, strata[h].sampled);  // cumulative targets are monotone
+        // Finish rule: a draw that reads most of what remains is better spent
+        // reading the stratum whole -- nearly the same cost, zero residual
+        // variance, and a persistent exact summary when the stratum persists.
+        const std::uint64_t remaining = strata[h].N - strata[h].sampled;
+        if (t > strata[h].sampled &&
+            static_cast<double>(t - strata[h].sampled) >
+                cfg_.exactification_sample_fraction *
+                    static_cast<double>(remaining)) {
+            t = strata[h].N;
+        }
         plan.target[h] = t;
-        plan.remaining_residual += strata[h].N - strata[h].sampled;
+        plan.remaining_residual += remaining;
         if (t > strata[h].sampled) {
             plan.planned_new_reads += t - strata[h].sampled;
             plan.no_target_increase = false;

@@ -3,18 +3,25 @@
 // For each query the engine refines the access path (or merely locates, on a
 // non-cracking substrate), decomposes the qualifying objects into exact and
 // residual contributors, and then either returns an exact answer or runs the
-// confidence-bounded sampling loop until every aggregate meets its target.
-// The loop has two decisions per round: read the residual in full when the
-// next sampling round would be nearly as expensive, or otherwise sample more
-// (giving up to a full read when planning stalls or the round budget runs
-// out). Exactification is not a separate mechanism: it is a read round whose
-// target for every residual stratum is the stratum's whole population, so it
-// reads only the rows not yet sampled and folds them into the same running
-// summaries -- a stratum read to completion then contributes exactly with zero
-// variance. Sampled progress on whole-partition strata is kept in the
-// partition state store, so when summaries are persisted later overlapping
-// queries reuse it; progress on partial-overlap strata is query-local and
-// discarded at query end (it described only this rectangle).
+// confidence-bounded read loop until every aggregate meets its target. The
+// loop is a two-phase sampling design: a pilot round first raises every
+// residual stratum to a small fixed sample
+// (taking tiny strata whole) so each stratum's variance is estimated from
+// its own rows; each subsequent round re-solves a Neyman allocation from the
+// observed statistics, reading a stratum to completion instead whenever the
+// plan would cover most of it. Persisted samples from earlier queries count
+// toward the pilot, so a revisited stratum plans from real local statistics
+// with no new reads. If the round budget runs out -- or a plan cannot raise
+// any target while some aggregate still fails -- the remaining residual is
+// read in full, the terminal fallback that guarantees termination with a
+// correct answer. Reading a stratum to completion is not a separate
+// mechanism: it is a read round whose target is the stratum's whole
+// population, so it reads only the rows not yet sampled and folds them into
+// the same running summaries, after which the stratum contributes exactly
+// with zero variance. Sampled progress on whole-partition strata is kept in
+// the partition state store, so when summaries are persisted later
+// overlapping queries reuse it; progress on partial-overlap strata is
+// query-local and discarded at query end (it described only this rectangle).
 //
 // A single behavior is captured by two flags: whether to honor the query's
 // accuracy target or force an exact answer, and whether to keep reusable
@@ -101,10 +108,10 @@ private:
     // its cumulative `targets[h]` (those not yet sampled), gather every
     // measure over the merged ascending stream, and fold the results into the
     // partition's running summary (persistent for reusable strata, query-local
-    // otherwise). `is_exactify` only selects which work counter the new rows
-    // are charged to.
+    // otherwise). Rows read toward a full-population target are charged to
+    // the exactified-rows counter, all others to the sampled-rows counter.
     void read_round(const std::vector<std::uint64_t>& targets,
-                    std::uint64_t ordinal, std::uint64_t round, bool is_exactify,
+                    std::uint64_t ordinal, std::uint64_t round,
                     QueryMetrics& metrics);
     // Read every residual stratum to completion (target == population), so the
     // remaining rows are read once and the residual variance collapses to zero.
@@ -126,8 +133,10 @@ private:
     Estimator           estimator_;
     Allocator           allocator_;
 
-    std::vector<StratumPrior> global_priors_;  // per measure
-    double                    global_mean_abs_ = 0.0;
+    // Largest absolute per-measure global mean, from the manifest statistics:
+    // the scale behind the magnitude floors that keep relative half-widths
+    // and variance budgets meaningful near zero totals.
+    double global_mean_abs_ = 0.0;
 
     // Reset per query.
     std::vector<ResidualPartition> residual_;

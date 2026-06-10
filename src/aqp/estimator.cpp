@@ -11,10 +11,6 @@ namespace a3i {
 namespace {
 
 constexpr double kMagnitudeFloorDelta = 1e-6;
-// Fixed 95% normal deviate for the Wilson center used at sample proportions
-// of exactly zero or one, so a small all-present/all-missing sample is not
-// treated as deterministic.
-constexpr double kWilsonZ = 1.959963984540054;
 
 // Per-stratum variance components retained for the Satterthwaite degrees of
 // freedom and for the linearized AVG variance.
@@ -141,10 +137,7 @@ std::vector<AggregateEstimate> Estimator::estimate(
             if (v_sum_h < 0.0) v_sum_h = 0.0;
 
             const double p_hat = n / m;
-            const double p_adj =
-                (p_hat <= 0.0 || p_hat >= 1.0)
-                    ? (n + kWilsonZ * kWilsonZ / 2.0) / (m + kWilsonZ * kWilsonZ)
-                    : p_hat;
+            const double p_adj = presence_rate_for_variance(s.n, s.m);
             const double c_hat = N * p_hat;
             double v_cnt_h = N * N * (p_adj * (1.0 - p_adj) / (m - 1.0)) * fpc;
             if (v_cnt_h < 0.0) v_cnt_h = 0.0;

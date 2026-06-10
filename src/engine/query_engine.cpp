@@ -34,25 +34,14 @@ QueryEngine::QueryEngine(const BinaryColumnStore& store, IndexTable& table,
       measure_count_(store.measure_count()),
       estimator_(),
       allocator_(config.allocator) {
-    // Per-measure priors from the global statistics: the fraction of present
-    // values and the mean / standard deviation of those present.
-    global_priors_.resize(measure_count_);
+    // The largest absolute per-measure global mean scales the magnitude
+    // floors of the relative-half-width checks and variance budgets.
     for (MeasureId mid = 0; mid < measure_count_; ++mid) {
         const GlobalMeasureStats& g = store_.global_stats(mid);
-        const std::uint64_t total = g.non_nan_count + g.nan_count;
-        StratumPrior prior;
-        prior.p = total > 0
-                      ? static_cast<double>(g.non_nan_count) /
-                            static_cast<double>(total)
-                      : 0.0;
         if (g.non_nan_count > 0) {
-            prior.mu_nn = g.sum / static_cast<double>(g.non_nan_count);
-            const double mean_sq = g.sum_sq / static_cast<double>(g.non_nan_count);
-            const double var = mean_sq - prior.mu_nn * prior.mu_nn;
-            prior.sigma_nn = std::sqrt(std::max(0.0, var));
+            const double mu = g.sum / static_cast<double>(g.non_nan_count);
+            global_mean_abs_ = std::max(global_mean_abs_, std::abs(mu));
         }
-        global_priors_[mid] = prior;
-        global_mean_abs_ = std::max(global_mean_abs_, std::abs(prior.mu_nn));
     }
 }
 
@@ -162,7 +151,6 @@ std::vector<StratumAlloc> QueryEngine::assemble_allocation() const {
         StratumAlloc a;
         a.N = p.N;
         a.sampled = sampled_count(p);
-        a.priors = global_priors_;
         a.observed.resize(measure_count_);
         for (MeasureId mid = 0; mid < measure_count_; ++mid) {
             a.observed[mid] = sample_for(p, mid);
@@ -174,7 +162,7 @@ std::vector<StratumAlloc> QueryEngine::assemble_allocation() const {
 
 void QueryEngine::read_round(const std::vector<std::uint64_t>& targets,
                              std::uint64_t ordinal, std::uint64_t round,
-                             bool is_exactify, QueryMetrics& metrics) {
+                             QueryMetrics& metrics) {
     std::vector<StratumCursor> cursors;
     cursors.reserve(residual_.size());
     std::vector<std::uint64_t> new_rows(residual_.size(), 0);
@@ -231,7 +219,10 @@ void QueryEngine::read_round(const std::vector<std::uint64_t>& targets,
     for (std::size_t h = 0; h < residual_.size(); ++h) {
         if (new_rows[h] == 0) continue;
         ResidualPartition& p = residual_[h];
-        if (is_exactify) {
+        // Rows that complete a stratum are full-read work, rows that keep it
+        // partially sampled are sampling work -- regardless of which round
+        // shape requested them.
+        if (h < targets.size() && targets[h] >= p.N) {
             metrics.exactified_rows += new_rows[h];
         } else {
             metrics.sampled_rows += new_rows[h];
@@ -261,7 +252,7 @@ void QueryEngine::exactify_round(std::uint64_t ordinal, std::uint64_t round,
     for (std::size_t h = 0; h < residual_.size(); ++h) {
         targets[h] = residual_[h].N;
     }
-    read_round(targets, ordinal, round, /*is_exactify=*/true, metrics);
+    read_round(targets, ordinal, round, metrics);
 }
 
 bool QueryEngine::all_satisfied(const std::vector<AggregateEstimate>& est,
@@ -328,36 +319,52 @@ QueryResult QueryEngine::execute(const RangeQuery& query,
     std::string cause = "none";
     double pre_err = 0.0;
 
-    while (!all_satisfied(estimates, rel)) {
+    // Pilot phase: bring every residual stratum to the pilot sample (small
+    // strata are taken whole) so the planner works from observed statistics.
+    // Strata with enough persisted samples from earlier queries need no
+    // pilot reads.
+    if (!all_satisfied(estimates, rel)) {
         ++round;
-        const std::vector<StratumAlloc> alloc = assemble_allocation();
-        const AllocationPlan plan =
-            round == 1
-                ? allocator_.plan_initial(alloc, d.exact_bucket, eff,
-                                          global_mean_abs_)
-                : allocator_.plan_adaptive(alloc, estimates, eff,
-                                           global_mean_abs_);
+        const AllocationPlan pilot =
+            allocator_.plan_pilot(assemble_allocation());
+        if (!pilot.no_target_increase) {
+            read_round(pilot.target, query_ordinal, round, m);
+            estimates = estimator_.estimate(d.exact_bucket, d.total_count,
+                                            assemble_estimator_input(),
+                                            global_mean_abs_, conf);
+        }
+    }
 
-        const bool cheaper = plan.next_round_reads_fraction() >
-                             config_.allocator.exactification_sample_fraction;
-        // The round budget counts the final exactification round: with a
-        // budget of R, rounds 1..R-1 sample and round R reads the remainder.
-        const bool stalled =
-            plan.no_target_increase ||
-            round >= config_.allocator.max_sampling_rounds;
-
-        if (cheaper || stalled) {
+    // Planned rounds: Neyman re-plans from observed statistics, each one
+    // either converging or escalating saturated strata to full reads. The
+    // round budget counts the pilot and the terminal full read: with a
+    // budget of R, rounds 2..R-1 are planned rounds and round R reads the
+    // remainder.
+    while (!all_satisfied(estimates, rel)) {
+        const bool budget_left =
+            round + 1 < config_.allocator.max_sampling_rounds;
+        AllocationPlan plan;
+        if (budget_left) {
+            plan = allocator_.plan(assemble_allocation(), estimates, eff,
+                                   global_mean_abs_);
+        }
+        // Terminal fallback: budget spent, or the planner cannot raise any
+        // target while an aggregate still fails. Reading the remaining
+        // residual in full always terminates with a correct answer.
+        if (!budget_left || plan.no_target_increase) {
+            ++round;
             pre_err = max_relative_half_width(estimates);
             exactify_round(query_ordinal, round, m);
             exactified = true;
-            cause = cheaper ? "cheaper_to_exactify" : "gave_up";
+            cause = "gave_up";
             estimates = estimator_.estimate(d.exact_bucket, d.total_count,
                                             assemble_estimator_input(),
                                             global_mean_abs_, conf);
             break;
         }
 
-        read_round(plan.target, query_ordinal, round, /*is_exactify=*/false, m);
+        ++round;
+        read_round(plan.target, query_ordinal, round, m);
         estimates = estimator_.estimate(d.exact_bucket, d.total_count,
                                         assemble_estimator_input(),
                                         global_mean_abs_, conf);

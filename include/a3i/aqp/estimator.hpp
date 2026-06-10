@@ -40,6 +40,22 @@ struct StratumSample {
     double        Q = 0.0;
 };
 
+/// The presence rate used inside variance formulas. At an interior sample
+/// proportion this is the plain n/m; at the boundaries (all-present or
+/// all-missing) it is replaced by the 95% Wilson score center so a small
+/// boundary sample is not treated as deterministic. Shared by the
+/// estimator and the sampling planner so both reason about the same COUNT
+/// variance: a planner using the raw proportion would believe an all-present
+/// stratum needs no further samples while the estimator still reports a
+/// non-degenerate interval, and the loop would stall.
+inline double presence_rate_for_variance(std::uint64_t n, std::uint64_t m) {
+    constexpr double kZ = 1.959963984540054;
+    const double p = static_cast<double>(n) / static_cast<double>(m);
+    if (p > 0.0 && p < 1.0) return p;
+    return (static_cast<double>(n) + kZ * kZ / 2.0) /
+           (static_cast<double>(m) + kZ * kZ);
+}
+
 class Estimator {
 public:
     /// Produce one estimate per (measure x {SUM, COUNT(measure), AVG}) in

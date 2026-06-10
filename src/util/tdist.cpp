@@ -115,4 +115,21 @@ double t_quantile(double p, double nu) {
     return upper ? t : -t;
 }
 
+// Wilson-Hilferty transform: the cube root of a chi-squared variable over its
+// degrees of freedom is approximately normal with mean 1 - 2/(9 nu) and
+// variance 2/(9 nu), so the quantile is the back-transformed normal quantile.
+double chi_squared_quantile(double p, double nu) {
+    if (nu < 1.0) nu = 1.0;
+    if (p <= 0.0) p = std::numeric_limits<double>::min();
+    if (p >= 1.0) p = 1.0 - 1e-16;
+
+    const double z = normal_quantile(p);
+    const double s = 2.0 / (9.0 * nu);
+    const double cube = 1.0 - s + z * std::sqrt(s);
+    const double x = nu * cube * cube * cube;
+    // The cube can go non-positive in the far lower tail at tiny nu; the
+    // distribution itself is strictly positive, so floor accordingly.
+    return x > 0.0 ? x : std::numeric_limits<double>::min();
+}
+
 }  // namespace a3i
