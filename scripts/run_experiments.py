@@ -381,7 +381,7 @@ def render_mem_launcher(template: str | None, cap: int) -> list[str]:
 
 def run_cell(a3i_run: Path, cell: Cell, manifest: Path, workload_csv: Path,
              qresults: Path, runmeta: Path, cold: bool,
-             mem_launcher: list[str] | None) -> None:
+             mem_launcher: list[str] | None, sort_gather: bool = True) -> None:
     qresults.parent.mkdir(parents=True, exist_ok=True)
     tmp_q = qresults.with_suffix(qresults.suffix + ".tmp")
     tmp_m = runmeta.with_suffix(runmeta.suffix + ".tmp")
@@ -408,6 +408,12 @@ def run_cell(a3i_run: Path, cell: Cell, manifest: Path, workload_csv: Path,
     # segment keeps the two backings in separate cells, so they are never pooled.
     if mem_is_in_memory(cell.mem):
         cmd += ["--in-memory"]
+
+    # Gather sorting is a run-wide setting, not a cell axis: it is recorded in
+    # the runmeta sidecar (sort_gather_by_row_id) and the validator refuses to
+    # pool runs that differ on it, so a whole results tree is built one way.
+    if not sort_gather:
+        cmd += ["--no-sort-gather"]
 
     cap = mem_bytes(cell.mem)
     if cap is not None:
@@ -517,7 +523,7 @@ def _run_plan(plan_id, cells, args, results_root, prepared_root, workloads_dir,
                 cold = evicted or dropped
             try:
                 run_cell(a3i_run, cell, manifest, workload_csv, qresults, runmeta,
-                         cold, args.mem_launcher)
+                         cold, args.mem_launcher, sort_gather=not args.no_sort_gather)
                 done += 1
                 print(f"ran: {cell.method:14s} {rel}")
                 logline({"path": rel, "status": "done"})
@@ -565,6 +571,10 @@ def main() -> int:
     ap.add_argument("--warm", action="store_true",
                     help="skip cache eviction entirely; records cold=false "
                          "(dev only -- columns may be served from a warm cache)")
+    ap.add_argument("--no-sort-gather", action="store_true",
+                    help="build every cell with measure-gather sorting OFF "
+                         "(passes --no-sort-gather to a3i_run; recorded in "
+                         "runmeta).")
     ap.add_argument("--drop-caches-cmd", default=os.environ.get("A3I_DROP_CACHES_CMD"),
                     help="optional shell hook run before each cell to flush the "
                          "WHOLE-MACHINE page cache (e.g. a sudo-granted helper "
