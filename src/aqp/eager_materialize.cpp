@@ -35,19 +35,28 @@ void materialize_all_summaries(const AdaptiveAccessPath& access_path,
         population[id] = static_cast<std::uint64_t>(pv.end - pv.begin);
     }
 
-    // Per-partition, per-measure exact moments. One sequential sweep per column
-    // routes each value into its owning partition's accumulator. The column is
-    // read through its raw mapped span (no per-element bounds checks) and the
-    // kernel is told to expect a front-to-back scan so it reads ahead.
-    std::vector<std::vector<MomentStats>> acc(
-        static_cast<std::size_t>(max_id) + 1,
-        std::vector<MomentStats>(measure_count));
-    for (std::size_t mid = 0; mid < measure_count; ++mid) {
+    // Per-partition, per-measure exact moments, in a flat contiguous block
+    // indexed [partition * measure_count + measure]. The accumulator access
+    // pattern is dictated by the source's row order (owner[r] hops between
+    // partitions whenever consecutive rows belong to different leaves), so the
+    // update must cost one cache line.
+    //
+    // A single front-to-back sweep folds ALL measures of a row at once: the
+    // row's accumulators are adjacent in the flat block (touched together),
+    // and the measure columns are read as parallel sequential streams that
+    // the kernel's readahead handles like a single scan each.
+    const std::size_t k = measure_count;
+    std::vector<MomentStats> acc((static_cast<std::size_t>(max_id) + 1) * k);
+    std::vector<std::span<const double>> cols(k);
+    for (std::size_t mid = 0; mid < k; ++mid) {
         const auto m = static_cast<MeasureId>(mid);
         store.advise_sequential(m);
-        const std::span<const double> col = store.measure_column(m);
-        for (RowId r = 0; r < n; ++r) {
-            acc[owner[r]][mid].add_if_present(col[r]);
+        cols[mid] = store.measure_column(m);
+    }
+    for (RowId r = 0; r < n; ++r) {
+        MomentStats* row_acc = &acc[static_cast<std::size_t>(owner[r]) * k];
+        for (std::size_t mid = 0; mid < k; ++mid) {
+            row_acc[mid].add_if_present(cols[mid][r]);
         }
     }
 
@@ -61,7 +70,7 @@ void materialize_all_summaries(const AdaptiveAccessPath& access_path,
             const auto m = static_cast<MeasureId>(mid);
             MeasureSummary& s = state.get_or_create(id, m, pop);
             s.sampled_rows = pop;
-            s.non_nan = acc[id][mid];
+            s.non_nan = acc[static_cast<std::size_t>(id) * k + mid];
         }
     }
 
@@ -72,19 +81,17 @@ void materialize_all_summaries(const AdaptiveAccessPath& access_path,
     // moments; no measure is read again. A parent is always created before its
     // children, so its id is smaller than any descendant leaf id and the dense
     // accumulators sized to max_id+1 index it directly -- no hashing.
-    std::vector<std::vector<MomentStats>> parent_acc(
-        static_cast<std::size_t>(max_id) + 1);
+    std::vector<MomentStats> parent_acc(
+        (static_cast<std::size_t>(max_id) + 1) * k);
     std::vector<std::uint64_t> parent_pop(static_cast<std::size_t>(max_id) + 1, 0);
     std::vector<char> is_parent(static_cast<std::size_t>(max_id) + 1, 0);
     for (PartitionId id : active) {
         std::optional<PartitionId> cur = access_path.parent(id);
         while (cur) {
-            if (!is_parent[*cur]) {
-                is_parent[*cur] = 1;
-                parent_acc[*cur].resize(measure_count);
-            }
-            for (std::size_t mid = 0; mid < measure_count; ++mid) {
-                parent_acc[*cur][mid].merge(acc[id][mid]);
+            is_parent[*cur] = 1;
+            for (std::size_t mid = 0; mid < k; ++mid) {
+                parent_acc[static_cast<std::size_t>(*cur) * k + mid].merge(
+                    acc[static_cast<std::size_t>(id) * k + mid]);
             }
             parent_pop[*cur] += population[id];
             cur = access_path.parent(*cur);
@@ -95,11 +102,11 @@ void materialize_all_summaries(const AdaptiveAccessPath& access_path,
         const auto pid = static_cast<PartitionId>(id);
         const std::uint64_t pop = parent_pop[id];
         state.ensure_partition(pid, measure_count);
-        for (std::size_t mid = 0; mid < measure_count; ++mid) {
+        for (std::size_t mid = 0; mid < k; ++mid) {
             const auto m = static_cast<MeasureId>(mid);
             MeasureSummary& s = state.get_or_create(pid, m, pop);
             s.sampled_rows = pop;
-            s.non_nan = parent_acc[id][mid];
+            s.non_nan = parent_acc[id * k + mid];
         }
     }
 }
