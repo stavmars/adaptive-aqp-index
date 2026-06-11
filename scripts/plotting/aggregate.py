@@ -59,10 +59,13 @@ def cost_summary(frame: pd.DataFrame) -> pd.DataFrame:
 
 def with_error(frame: pd.DataFrame) -> pd.DataFrame:
     """Join every row to the `scan` oracle truth at the same
-    `(dataset, workload, query, aggregate, measure)` and add `error` (relative,
-    floored at 1) and `covered` (truth within `[ci_low, ci_high]`, only for
-    non-exact rows with a finite interval; NaN otherwise). The oracle is matched
-    on the join key only -- it is independent of mem/str/run/eb."""
+    `(dataset, workload, query, aggregate, measure)` and add `error` (true
+    relative error |est - truth| / |truth|; NaN where the truth is zero, so a
+    zero-truth aggregate is excluded from relative statistics rather than
+    silently scored on an arbitrary absolute scale) and `covered` (truth within
+    `[ci_low, ci_high]`, only for non-exact rows with a finite interval; NaN
+    otherwise). The oracle is matched on the join key only -- it is independent
+    of mem/str/run/eb."""
     oracle = (frame[frame["method"] == "scan"]
               [_ORACLE_KEYS + ["estimate"]]
               .drop_duplicates(subset=_ORACLE_KEYS)
@@ -72,7 +75,7 @@ def with_error(frame: pd.DataFrame) -> pd.DataFrame:
     truth = pd.to_numeric(m["truth"], errors="coerce")
     lo = pd.to_numeric(m["ci_low"], errors="coerce")
     hi = pd.to_numeric(m["ci_high"], errors="coerce")
-    m["error"] = (est - truth).abs() / truth.abs().clip(lower=1.0)
+    m["error"] = (est - truth).abs() / truth.abs().where(truth.abs() > 0)
     covered = (lo <= truth) & (truth <= hi)
     # coverage is only meaningful for genuinely-sampled (non-exact) intervals
     m["covered"] = covered.where(~m["exact"] & lo.notna() & hi.notna() & truth.notna())
@@ -92,11 +95,7 @@ def accuracy_summary(frame: pd.DataFrame, eb: float) -> pd.DataFrame:
     return out
 
 
-def cell_summary(frame: pd.DataFrame, eb: float) -> pd.DataFrame:
-    """One row per method-cell: cost + accuracy + speedup over `scan`."""
-    cost = cost_summary(frame)
-    acc = accuracy_summary(frame, eb)
-    out = cost.merge(acc, on=list(METHOD_KEYS), how="left")
+def _with_speedup(out: pd.DataFrame) -> pd.DataFrame:
     # speedup = scan cumulative / this method's cumulative, within the comparable
     # slice (same nm/mem/str/n) -- not just (dataset, workload), or multiple nm
     # would match several scan cells and duplicate every row.
@@ -108,6 +107,24 @@ def cell_summary(frame: pd.DataFrame, eb: float) -> pd.DataFrame:
     return out
 
 
+def cost_cell_summary(frame: pd.DataFrame) -> pd.DataFrame:
+    """One row per method-cell: cost + speedup over `scan`, no accuracy. This is
+    the performance view; answer correctness and CI coverage are judged by
+    validate_results.py (per measure and aggregate, over replicate runs), not
+    pooled here."""
+    return _with_speedup(cost_summary(frame))
+
+
+def cell_summary(frame: pd.DataFrame, eb: float) -> pd.DataFrame:
+    """One row per method-cell: cost + accuracy + speedup over `scan`. The
+    accuracy columns (within_eb/coverage/max_relerr) are descriptive and pooled;
+    figures that need a per-measure or judged view use validate_results.py
+    output instead."""
+    out = cost_summary(frame).merge(accuracy_summary(frame, eb),
+                                    on=list(METHOD_KEYS), how="left")
+    return _with_speedup(out)
+
+
 def shared_or_raise(frame: pd.DataFrame, axis: str) -> object:
     """Comparison-safety: every cell in `frame` must share `axis` (e.g. `cold`,
     `mem`) or the comparison is confounded -- raise. Returns the shared value."""
@@ -115,3 +132,22 @@ def shared_or_raise(frame: pd.DataFrame, axis: str) -> object:
     if len(vals) > 1:
         raise ValueError(f"comparison mixes {axis}={sorted(vals)}; not comparable")
     return next(iter(vals), None)
+
+
+def clip_to_shared_prefix(frame: pd.DataFrame) -> pd.DataFrame:
+    """Restrict to the query prefix every cell shares -- fairness when a capped
+    run (smaller `n`) is compared with a fuller one: keep only
+    `query_ordinal < min n`. A no-op when all cells ran the same length."""
+    if frame.empty or "n" not in frame.columns:
+        return frame
+    shortest = pd.to_numeric(frame["n"], errors="coerce").min()
+    if pd.isna(shortest):
+        return frame
+    return frame[frame["query_ordinal"] < int(shortest)]
+
+
+def mixed_versions(frame: pd.DataFrame) -> list:
+    """The distinct engine build versions in `frame` if more than one (a
+    comparison across builds is suspect); else an empty list."""
+    vals = sorted(set(frame["engine_build_version"].dropna().unique().tolist()))
+    return vals if len(vals) > 1 else []

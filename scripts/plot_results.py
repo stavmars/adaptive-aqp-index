@@ -16,9 +16,17 @@ axis such as `mem` is never auto-varied). Absent cells never crash a run; only
 corrupt input fails (in Layer 1). This is the quick look during experimentation;
 declared, manifest-driven figures come separately.
 
+Declared figures (the figure manifest in `plotting/figures.py`) are the other
+mode: each selects its own cells, so they are declared rather than inferred.
+`--all` renders every figure, `--figure <id>` one,
+`--plan <id>` into a plan-named directory; a figure whose cells are absent is
+skipped, or fails under `--strict`.
+
 Usage:
     scripts/plot_results.py --explore
-    scripts/plot_results.py --explore --dataset synth10_100M --out-dir /tmp/plots
+    scripts/plot_results.py --all
+    scripts/plot_results.py --figure cumulative_time --dataset taxi
+    scripts/plot_results.py --plan substrate_sweep --strict
 """
 from __future__ import annotations
 
@@ -26,7 +34,7 @@ import argparse
 from pathlib import Path
 
 import a3i_config
-from plotting import aggregate, load, render
+from plotting import aggregate, figures, load, render
 
 # Axes a facet may legitimately vary on (besides the dataset/workload facet and
 # the always-reduced run_id). `substrate` is intentionally excluded: it is bound
@@ -36,6 +44,26 @@ COMPARE_AXES = ("method", "nm", "str", "eb", "n")
 # Hard-constraint axes: kept fixed unless a declared sweep varies them, never
 # auto-varied in exploration.
 HARD_AXES = ("mem",)
+
+
+# Canonical method order for the shared legend.
+METHOD_ORDER = ("scan", "kd", "kd_agg", "adkd", "adkd_agg", "adkd_sampling", "a3i")
+
+
+def _write_legend(frame, out_dir: Path):
+    """Emit a standalone legend.pdf with the per-method key present in `frame`,
+    so a page of subplots rendered with --legend none can share one legend."""
+    import matplotlib.pyplot as plt
+
+    present = set(frame["method"].dropna().unique())
+    methods = [m for m in METHOD_ORDER if m in present]
+    if not methods:
+        return
+    fig = render.legend_only(methods)
+    path = out_dir / "legend.pdf"
+    fig.savefig(path)
+    plt.close(fig)
+    print(f"wrote {path}")
 
 
 class AmbiguousComparison(ValueError):
@@ -113,31 +141,97 @@ def explore(frame, out_dir: Path, eb: float):
         for path in paths:
             print(f"wrote {path}")
         written.extend(paths)
+    if written:
+        _write_legend(frame, out_dir)
+    return written
+
+
+def render_figures(frame, out_dir: Path, eb: float, nm, *, only=None, strict=False):
+    """Render the declared figures (or just `only`) into `out_dir`.
+
+    `eb`/`nm` are the within-facet axes the comparison figures pin to. A figure
+    whose required cells are absent is skipped with a message; under `strict` it
+    raises instead (the gate for a complete figure set).
+    """
+    import matplotlib.pyplot as plt
+
+    versions = aggregate.mixed_versions(frame)
+    if versions:
+        print(f"warning: results span multiple engine builds {versions}; "
+              "cross-build comparisons may be unfair")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    specs = [figures.by_id(only)] if only else list(figures.FIGURES)
+    written = []
+    for spec in specs:
+        items = spec.build(frame, eb, nm)
+        if not items:
+            message = f"{spec.id}: required cells absent"
+            if strict:
+                raise figures.MissingCells(message)
+            print(f"skip {message}")
+            continue
+        for suffix, fig in items:
+            path = out_dir / f"{spec.id}__{suffix}.pdf"
+            fig.savefig(path)
+            plt.close(fig)
+            written.append(path)
+            print(f"wrote {path}")
+    if written:
+        _write_legend(frame, out_dir)
     return written
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(
-        description="Exploratory plots from the results matrix.")
-    ap.add_argument("--explore", action="store_true",
-                    help="render discovery-driven exploratory views (required)")
+    ap = argparse.ArgumentParser(description="Plots from the results matrix.")
+    mode = ap.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--explore", action="store_true",
+                      help="discovery-driven exploratory views")
+    mode.add_argument("--all", action="store_true",
+                      help="render every declared figure")
+    mode.add_argument("--figure", default=None,
+                      help="render one declared figure by id")
+    mode.add_argument("--plan", default=None,
+                      help="render the declared figures into a plan-named dir")
     ap.add_argument("--results-root", default=None)
-    ap.add_argument("--out-dir", default="experiments/plots/explore",
-                    help="output directory (default experiments/plots/explore)")
+    ap.add_argument("--out-dir", default=None,
+                    help="output directory (a mode-specific default otherwise)")
     ap.add_argument("--dataset", default=None, help="restrict to one dataset")
     ap.add_argument("--workload", default=None, help="restrict to one workload")
-    ap.add_argument("--eb", type=float, default=0.01,
-                    help="error bound for within-eb / accuracy summaries")
+    ap.add_argument("--eb", type=float, default=figures.PIN_DEFAULTS["eb"],
+                    help="error bound the comparison figures pin to "
+                         f"(default {figures.PIN_DEFAULTS['eb']})")
+    ap.add_argument("--nm", type=int, default=figures.PIN_DEFAULTS["nm"],
+                    help="number of measures the comparison figures pin to; "
+                         f"falls back to the largest present (default {figures.PIN_DEFAULTS['nm']})")
+    ap.add_argument("--strict", action="store_true",
+                    help="fail if a declared figure's required cells are absent")
+    ap.add_argument("--per-query-head", type=int, default=None,
+                    help="cap the per-query figure to the first N queries "
+                         "(default: the full run)")
+    ap.add_argument("--legend", choices=["outside", "none"], default="outside",
+                    help="per-figure legend: below the axes (default) or omitted "
+                         "(a standalone legend.pdf is always written either way)")
+    ap.add_argument("--title", choices=["on", "off"], default="on",
+                    help="per-figure title with dataset/nm/eb context (default on); "
+                         "turn off for bare figures captioned externally")
     args = ap.parse_args(argv)
 
-    if not args.explore:
-        ap.error("specify --explore")
+    figures.PER_QUERY_HEAD = args.per_query_head
+    render.LEGEND = args.legend
+    render.TITLES = args.title == "on"
 
     frame = load.load_frame(
         a3i_config.results_root(args.results_root),
         datasets=[args.dataset] if args.dataset else None,
         workloads=[args.workload] if args.workload else None)
-    explore(frame, Path(args.out_dir), args.eb)
+
+    if args.explore:
+        explore(frame, Path(args.out_dir or "experiments/plots/explore"), args.eb)
+    else:
+        default = (f"experiments/plots/{args.plan}" if args.plan
+                   else "experiments/plots/figures")
+        render_figures(frame, Path(args.out_dir or default), args.eb, args.nm,
+                       only=args.figure or None, strict=args.strict)
     return 0
 
 

@@ -34,8 +34,8 @@ PALETTE = {
     "purple": "#CC79A7",
 }
 
-# One fixed identity per run id, reused across every figure. External systems
-# (duckdb/pilotdb/...) fall through to `_FALLBACK_STYLE`.
+# One fixed identity per run id, reused across every figure. Unknown run ids
+# (e.g. external baselines) fall through to `_FALLBACK_STYLE`.
 _METHOD_STYLE = {
     "scan":          {"color": PALETTE["black"],     "marker": "o", "linestyle": "-"},
     "kd":            {"color": PALETTE["skyblue"],    "marker": "s", "linestyle": "--"},

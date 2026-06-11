@@ -48,7 +48,7 @@ def _aggs(measures, est, exact=True, ci=None, count_star=100.0):
 
 def write_cell(root, dataset, workload, substrate, method, key, run, n,
                aggs_for_q, latency=1.0, reads=10, init_ms=0.0,
-               header=None, ordinals=None):
+               header=None, ordinals=None, version="test"):
     d = Path(root) / dataset / workload / substrate / method
     d.mkdir(parents=True, exist_ok=True)
     qf = d / f"qresults_{key}_run{run}.csv"
@@ -67,7 +67,7 @@ def write_cell(root, dataset, workload, substrate, method, key, run, n,
                         exactify_cause="none", pre_exactification_error_bound=0.0,
                         sampling_seed=run, latency_ms=latency, measure_reads=reads)
             w.writerow([rowd[c] for c in EXPECTED_HEADER])
-    meta = dict(engine_build_version="test", cold=True, max_queries=n, run_id=run,
+    meta = dict(engine_build_version=version, cold=True, max_queries=n, run_id=run,
                 sampling_seed=run, confidence=0.95, num_measures=len(("m0", "m1")),
                 sort_gather_by_row_id=True, init_ms=init_ms, measure_storage="eager")
     (d / f"runmeta_{key}_run{run}.json").write_text(json.dumps(meta))
@@ -197,31 +197,65 @@ class TestDiagnostics(unittest.TestCase):
             fails = [f for f in self._findings(t) if f["status"] == "FAIL"]
             self.assertEqual(fails, [], f"unexpected FAILs: {fails}")
 
-    def test_reuse_violation_fires(self):
+    def test_reads_above_agg_warns(self):
         with tempfile.TemporaryDirectory() as t:
             _good_matrix(t)
-            # break the sampling-reads ordering: a3i reads MORE than adkd_agg
+            # a3i reads MORE than the aggregate methods: no guaranteed order
+            # (a3i samples; kd_agg/adkd_agg answer from summaries), so a WARN, not
+            # a FAIL. Still below the exact full-read methods (1000), so the
+            # sample-within-population check stays green.
             import shutil
-            d = Path(t) / "ds/wl/adaptive_kd/a3i"
-            shutil.rmtree(d)
+            shutil.rmtree(Path(t) / "ds/wl/adaptive_kd/a3i")
             approx = lambda q: _aggs(["m0", "m1"], lambda a, m: 100.5, exact=False,  # noqa: E731
                                      ci=lambda a, m, e: (95.0, 105.0))
             write_cell(t, "ds", "wl", "adaptive_kd", "a3i", KEYE, 0, 3, approx,
-                       latency=1.5, reads=500, init_ms=0.0)   # > adkd_agg (150)
+                       latency=1.5, reads=500, init_ms=0.0)  # > adkd_agg (150)
             names = {f["check"]: f["status"] for f in self._findings(t)}
-            self.assertEqual(names.get("a3i <= adkd_agg (sampling)"), "FAIL")
+            self.assertEqual(names.get("a3i <= adkd_agg (reads)"), "WARN")
+            # kd_agg has no expected read order vs a3i, so it is not checked.
+            self.assertIsNone(names.get("a3i <= kd_agg (reads)"))
+            self.assertEqual(
+                names.get("a3i <= exact reads (sample within population)"), "PASS")
 
-    def test_exact_mismatch_fires(self):
+    def test_sampling_exceeds_population_fires(self):
         with tempfile.TemporaryDirectory() as t:
             _good_matrix(t)
-            # corrupt kd_agg so it disagrees with the scan oracle
+            # a sample cannot exceed the qualifying population (the exact reads).
             import shutil
-            shutil.rmtree(Path(t) / "ds/wl/static_kd/kd_agg")
-            wrong = lambda q: _aggs(["m0", "m1"], lambda a, m: 105.0, exact=True)  # noqa: E731
-            write_cell(t, "ds", "wl", "static_kd", "kd_agg", KEY, 0, 3, wrong,
-                       latency=1.0, reads=50, init_ms=700.0)
+            shutil.rmtree(Path(t) / "ds/wl/adaptive_kd/a3i")
+            approx = lambda q: _aggs(["m0", "m1"], lambda a, m: 100.5, exact=False,  # noqa: E731
+                                     ci=lambda a, m, e: (95.0, 105.0))
+            write_cell(t, "ds", "wl", "adaptive_kd", "a3i", KEYE, 0, 3, approx,
+                       latency=1.5, reads=5000, init_ms=0.0)  # > full reads (1000)
             names = {f["check"]: f["status"] for f in self._findings(t)}
-            self.assertEqual(names.get("kd_agg == scan (exact)"), "FAIL")
+            self.assertEqual(
+                names.get("a3i <= exact reads (sample within population)"), "FAIL")
+
+    def test_exact_reads_disagree_fires(self):
+        with tempfile.TemporaryDirectory() as t:
+            _good_matrix(t)
+            # the exact non-agg methods must read the same qualifying set.
+            import shutil
+            shutil.rmtree(Path(t) / "ds/wl/static_kd/kd")
+            write_cell(t, "ds", "wl", "static_kd", "kd", KEY, 0, 3, EXACT3,
+                       latency=8.0, reads=900, init_ms=500.0)  # != scan/adkd (1000)
+            names = {f["check"]: f["status"] for f in self._findings(t)}
+            self.assertEqual(names.get("scan = kd = adkd (exact reads)"), "FAIL")
+
+    def test_a3i_not_fastest_warns(self):
+        with tempfile.TemporaryDirectory() as t:
+            _good_matrix(t)
+            # a3i slower end-to-end than an index method (but still < scan): the
+            # total-time lead is a soft expectation, so a WARN, not a FAIL.
+            import shutil
+            shutil.rmtree(Path(t) / "ds/wl/adaptive_kd/a3i")
+            approx = lambda q: _aggs(["m0", "m1"], lambda a, m: 100.5, exact=False,  # noqa: E731
+                                     ci=lambda a, m, e: (95.0, 105.0))
+            write_cell(t, "ds", "wl", "adaptive_kd", "a3i", KEYE, 0, 3, approx,
+                       latency=3.0, reads=60, init_ms=0.0)  # cum 9s > adkd_agg 6s, < scan 30s
+            names = {f["check"]: f["status"] for f in self._findings(t)}
+            self.assertEqual(names.get("a3i lowest total time"), "WARN")
+            self.assertEqual(names.get("a3i beats scan"), "PASS")
 
     def test_partial_matrix_no_crash(self):
         # only scan + a3i present -> pair checks needing other methods are skipped,
@@ -261,6 +295,30 @@ class TestMultiNm(unittest.TestCase):
                 sys.argv = argv
             self.assertIn(rc, (0, 1))
             self.assertTrue((Path(a) / "summary.csv").is_file())
+
+    def test_mixed_engine_versions_flagged(self):
+        # Two cells in one comparable slice stamped with different engine builds:
+        # a WARN by default (exit 0), a FAIL under --strict-version (exit 1).
+        approx = lambda q: _aggs(["m0", "m1"], lambda a, m: 100.5, exact=False,  # noqa: E731
+                                 ci=lambda a, m, e: (95.0, 105.0))
+        with tempfile.TemporaryDirectory() as t, tempfile.TemporaryDirectory() as a:
+            write_cell(t, "ds", "wl", "n_a", "scan", "mcols1_memINMEM_n3_str1024",
+                       0, 3, EXACT3, latency=10.0, reads=1000, version="0.1.0")
+            write_cell(t, "ds", "wl", "adaptive_kd", "a3i",
+                       "err0.01_mcols1_memINMEM_n3_str1024", 0, 3, approx,
+                       latency=1.5, reads=60, version="0.2.0")
+            argv = sys.argv
+            try:
+                sys.argv = ["analyze_results.py", "--results-root", t,
+                            "--analysis-root", a]
+                self.assertEqual(analyze_results.main(), 0)
+                self.assertIn("single engine version",
+                              (Path(a) / "findings.csv").read_text())
+                sys.argv = ["analyze_results.py", "--results-root", t,
+                            "--analysis-root", a, "--strict-version"]
+                self.assertEqual(analyze_results.main(), 1)
+            finally:
+                sys.argv = argv
 
 
 if __name__ == "__main__":

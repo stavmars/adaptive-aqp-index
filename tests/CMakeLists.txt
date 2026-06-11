@@ -104,6 +104,15 @@ if(Python3_Interpreter_FOUND)
     set_tests_properties(explore.test_explore PROPERTIES LABELS "unit")
 endif()
 
+# Declared figures: the figure manifest + driver (comparison guards, skip/strict),
+# on tiny in-memory frames. Fast and deterministic -> the `unit` gate. Skips
+# itself if pandas/matplotlib are unavailable.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME figures.test_figures
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_figures.py)
+    set_tests_properties(figures.test_figures PROPERTIES LABELS "unit")
+endif()
+
 # Statistical gate: seeded sanity plus the empirical CI-coverage sweep
 # (including the recorded heavy-tail under-coverage). Kept out of the fast
 # `unit` label because it runs many seeds.
