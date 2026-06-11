@@ -43,8 +43,7 @@ Estimated CSV sizes (~160 bytes/row average):
   --sample-mod 50   (2%):  ~36M rows -> ~5.8 GB
   --sample-mod 100  (1%):  ~18M rows -> ~2.9 GB
 
-After download, shuffle the data rows once while keeping the header (e.g.
-`{ head -1 in.csv; tail -n +2 in.csv | shuf; } > out.csv`) and run
+After download, shuffle the data rows once while keeping the header and run
 tools/csv_to_parquet --has-header to produce the Parquet.
 
 Usage:

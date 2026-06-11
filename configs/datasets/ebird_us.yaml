@@ -9,8 +9,10 @@
 # with physically impossible values: durations over 24h and non-positive
 # observer counts.
 dataset_id: ebird_us
+# The Parquet is a seeded row-shuffle of the raw export (scripts/
+# shuffle_parquet.py, seed 42).
 source:
-  parquet: ebird_us/ebd_US_2023_2026.parquet
+  parquet: ebird_us/ebd_US_2023_2026_shuffled.parquet
 dimensions:
   - {name: LONGITUDE, bounds: [-125.96, -66.24]}
   - {name: LATITUDE, bounds: [24.03, 49.36]}
