@@ -1,4 +1,7 @@
-# Number-of-measures sweep: vary nm at a single error bound. Values exceeding a
-# dataset's measure count are pruned per dataset (taxi/ebird cap at 4).
+# Number-of-measures sweep: vary nm at a single error bound, on the SYNTHETIC
+# dataset.
 plan_id: nm_sweep
+workloads:
+  - synth10_300M_random
+  - synth10_300M_clustered
 nm: [1, 2, 4, 6, 8]
