@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import fcntl
 import json
 import os
 import shlex
@@ -67,6 +68,9 @@ WORKLOAD_CONFIG_DIR = REPO_ROOT / "configs" / "workloads"
 
 AXIS_KEYS = ("runs", "workloads", "nm", "eb", "str", "mem", "run_id",
              "run_id_by_method", "max_queries", "confidence")
+
+# Holds the single-instance flock for the process lifetime (see main()).
+_instance_lock = None
 
 
 # --- tool resolution ---------------------------------------------------------
@@ -112,6 +116,52 @@ def find_tool(name: str) -> Path:
              f"(cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release && "
              f"cmake --build build-release), or set A3I_BUILD_DIR.\n"
              f"Searched:\n  " + searched)
+
+
+def acquire_single_instance_lock():
+    """Take an exclusive lock so only one experiment runner is ever active.
+
+    A second invocation while one is running would have both drive their own
+    `a3i_run` children against the same machine -- under a memory cap they then
+    contend for one budget and thrash, which looks like the engine being slow
+    when it is just oversubscription. We fail fast instead. The returned handle
+    must stay open for the process lifetime (closing it releases the lock); the
+    OS drops it automatically on exit, so a crash never leaves it stuck.
+    """
+    lock_path = Path(tempfile.gettempdir()) / "a3i_run_experiments.lock"
+    handle = open(lock_path, "w")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        sys.exit(f"another experiment runner holds {lock_path}; refusing to "
+                 f"start a second one (concurrent runs contend for memory and "
+                 f"distort timings). Wait for it to finish or kill it.")
+    handle.write(f"{os.getpid()}\n")
+    handle.flush()
+    return handle
+
+
+def warn_on_orphan_engines() -> None:
+    """Warn if stray a3i_run processes are already running.
+
+    Killing a runner does not necessarily kill its a3i_run children -- a
+    cgroup-launched child lives in its own scope and survives a parent signal
+    -- so an orphan from a previous run can still be holding memory and
+    competing with this run's cells. Surface it rather than silently
+    co-scheduling against it.
+    """
+    try:
+        out = subprocess.run(["pgrep", "-f", "apps/a3i_run"],
+                             capture_output=True, text=True)
+    except OSError:
+        return
+    pids = [p for p in out.stdout.split() if p.strip()]
+    if pids:
+        print(f"warning: {len(pids)} a3i_run process(es) already running "
+              f"(pids {', '.join(pids)}). They may be orphans from a previous "
+              f"run and will compete for memory/IO with this one, distorting "
+              f"timings. Kill them first:  kill -9 {' '.join(pids)}",
+              file=sys.stderr)
 
 
 def engine_version(a3i_run: Path) -> str:
@@ -623,6 +673,15 @@ def main() -> int:
     args = ap.parse_args()
     if bool(args.plan) == bool(args.all_plans):
         ap.error("specify exactly one of --plan <id...> or --all")
+
+    # One runner at a time; warn if engine processes from a prior run linger.
+    # (Skipped for --dry-run / --report, which launch nothing.) The lock handle
+    # is parked in a global so it is not garbage-collected -- closing it would
+    # release the flock -- for the whole run.
+    global _instance_lock
+    if not args.dry_run and not args.report:
+        _instance_lock = acquire_single_instance_lock()
+        warn_on_orphan_engines()
 
     prepared_root = a3i_config.prepared_root(args.prepared_root)
     results_root  = a3i_config.results_root(args.results_root)
