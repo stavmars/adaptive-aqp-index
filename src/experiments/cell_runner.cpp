@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <span>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -287,13 +288,16 @@ CellReport run_cell(const CellConfig& config) {
     // The engine path needs an in-memory point table and a substrate; the scan
     // oracle needs neither.
     IndexTable table = [&] {
-        std::vector<std::vector<double>> cols;
+        // View the store's resident dimension columns directly; the AoS buffer
+        // is the only allocation, so no transient duplicate of every dimension
+        // column inflates the build-time peak.
+        std::vector<std::span<const double>> cols;
         cols.reserve(d);
         for (std::size_t i = 0; i < d; ++i) {
-            auto span = store.dimension_column(static_cast<DimensionId>(i));
-            cols.emplace_back(span.begin(), span.end());
+            cols.push_back(store.dimension_column(static_cast<DimensionId>(i)));
         }
-        return IndexTable::from_columns(cols);
+        return IndexTable::from_columns(
+            std::span<const std::span<const double>>(cols));
     }();
 
     std::unique_ptr<AdaptiveAccessPath> substrate;

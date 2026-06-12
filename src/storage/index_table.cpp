@@ -10,7 +10,8 @@
 
 namespace a3i {
 
-IndexTable IndexTable::from_columns(const std::vector<std::vector<double>>& columns) {
+IndexTable IndexTable::from_columns(
+    std::span<const std::span<const double>> columns) {
     if (columns.empty()) {
         throw std::invalid_argument("IndexTable::from_columns: no dimension columns provided");
     }
@@ -41,6 +42,16 @@ IndexTable IndexTable::from_columns(const std::vector<std::vector<double>>& colu
     std::iota(row_ids.begin(), row_ids.end(), RowId{0});
 
     return IndexTable(std::move(points), std::move(row_ids), d);
+}
+
+IndexTable IndexTable::from_columns(
+    const std::vector<std::vector<double>>& columns) {
+    // Adapt owned columns to the span core; the spans view the inputs, so no
+    // dimension data is duplicated beyond the AoS buffer the core builds.
+    std::vector<std::span<const double>> spans;
+    spans.reserve(columns.size());
+    for (const auto& col : columns) spans.emplace_back(col);
+    return from_columns(std::span<const std::span<const double>>(spans));
 }
 
 IndexTable::IndexTable(std::vector<double> points,

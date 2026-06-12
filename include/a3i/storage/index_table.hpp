@@ -24,8 +24,10 @@ public:
     /// one contiguous AoS buffer; row_ids are initialized to [0..N).
     ///
     /// All columns must have the same length and at least one column
-    /// must be provided.
+    /// must be provided. The span overload reads the columns in place (e.g.
+    /// the store's resident dimension columns).
     static IndexTable from_columns(const std::vector<std::vector<double>>& columns);
+    static IndexTable from_columns(std::span<const std::span<const double>> columns);
 
     /// Low-level constructor. `points` is the interleaved AoS buffer
     /// (length must equal `dimensions * row_ids.size()`); `row_ids`
