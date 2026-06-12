@@ -71,23 +71,47 @@ AXIS_KEYS = ("runs", "workloads", "nm", "eb", "str", "mem", "run_id",
 
 # --- tool resolution ---------------------------------------------------------
 
+def is_debug_build(build_dir: Path) -> bool:
+    try:
+        for line in (build_dir / "CMakeCache.txt").read_text().splitlines():
+            if line.startswith("CMAKE_BUILD_TYPE:"):
+                return line.split("=", 1)[1].strip().lower() == "debug"
+    except OSError:
+        pass
+    return False
+
+
 def find_tool(name: str) -> Path:
+    # Prefer an explicit A3I_BUILD_DIR, then the optimized `build-release` tree,
+    # then `build` (which the project configures Debug for tests). Preferring
+    # build-release means a timing run defaults to the optimized binary even
+    # when A3I_BUILD_DIR is unset, and a Debug fallback is warned about below.
     candidates = []
     env_build = os.environ.get("A3I_BUILD_DIR")
     if env_build:
         candidates.append(Path(env_build) / "apps" / name)
         candidates.append(Path(env_build) / "tools" / name)
-    candidates.append(REPO_ROOT / "build" / "apps" / name)
-    candidates.append(REPO_ROOT / "build" / "tools" / name)
+    for tree in ("build-release", "build"):
+        candidates.append(REPO_ROOT / tree / "apps" / name)
+        candidates.append(REPO_ROOT / tree / "tools" / name)
     for cand in candidates:
         if cand.is_file() and os.access(cand, os.X_OK):
+            # cand is <tree>/<apps|tools>/<name>; the tree is two levels up.
+            if is_debug_build(cand.parent.parent):
+                print(f"warning: using a Debug build at {cand} -- it is "
+                      f"unoptimized and several times slower; build a Release "
+                      f"tree (cmake -S . -B build-release "
+                      f"-DCMAKE_BUILD_TYPE=Release) and/or set A3I_BUILD_DIR "
+                      f"for representative timings.", file=sys.stderr)
             return cand
     on_path = shutil.which(name)
     if on_path:
         return Path(on_path)
     searched = "\n  ".join(str(c) for c in candidates)
     sys.exit(f"{name} binary not found. Build the project first "
-             f"(cmake --build build), or set A3I_BUILD_DIR.\nSearched:\n  " + searched)
+             f"(cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release && "
+             f"cmake --build build-release), or set A3I_BUILD_DIR.\n"
+             f"Searched:\n  " + searched)
 
 
 def engine_version(a3i_run: Path) -> str:
@@ -361,10 +385,13 @@ def evict_from_cache(paths: list[Path]) -> bool:
 # Default cgroup launcher: a transient systemd scope whose memory controller
 # charges page cache (including the memory-mapped columns) against the cap and
 # forbids swap, so a run that needs more resident memory than the cap is killed
-# rather than silently spilling to disk-backed cache. Requires user-level cgroup
-# delegation or privilege; override with --mem-launcher / A3I_MEM_LAUNCH.
+# rather than silently spilling to disk-backed cache. The `--user` form goes
+# through the caller's own systemd user manager and needs no privilege where
+# the memory controller is delegated to the user (the common cgroup-v2 case);
+# a system-wide `systemd-run --scope` (without `--user`) needs root/polkit.
+# Override either way with --mem-launcher / A3I_MEM_LAUNCH.
 DEFAULT_MEM_LAUNCHER = (
-    "systemd-run --scope -q -p MemoryMax={bytes} -p MemorySwapMax=0 --")
+    "systemd-run --user --scope -q -p MemoryMax={bytes} -p MemorySwapMax=0 --")
 
 
 def render_mem_launcher(template: str | None, cap: int) -> list[str]:
