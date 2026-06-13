@@ -207,12 +207,23 @@ void QueryEngine::read_round(const std::vector<std::uint64_t>& targets,
 
     std::vector<std::vector<MomentStats>> round_moments(
         residual_.size(), std::vector<MomentStats>(measure_count_));
-    std::vector<double> vals(ids.size());
+    // One batched read covering every measure: the row ids are identical
+    // across columns, so gathering all measures together computes the sort and
+    // page-range coalescing plan once and reuses it for every column, rather
+    // than rebuilding that O(n) plan per measure. The values land contiguously
+    // per measure in vals[mid], which decouples the random read from the
+    // streaming fold below (both measured faster than the per-measure
+    // alternative at the engine's batch sizes -- decisively so in the mid
+    // range where the repeated planning would otherwise dominate).
+    std::vector<std::vector<double>> vals;
+    // The k-way merge above yields globally ascending ids exactly when
+    // gather-sorting is enabled (each merged cursor is then itself sorted);
+    // pass that through so the store skips re-checking the order.
+    store_.gather_all(ids, vals, config_.sort_gather_by_row_id);
     for (MeasureId mid = 0; mid < measure_count_; ++mid) {
-        store_.gather(mid, ids, vals);
         metrics.measure_reads += ids.size();
         for (std::size_t i = 0; i < ids.size(); ++i) {
-            round_moments[tags[i]][mid].add_if_present(vals[i]);
+            round_moments[tags[i]][mid].add_if_present(vals[mid][i]);
         }
     }
 

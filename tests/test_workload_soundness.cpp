@@ -23,7 +23,7 @@
 //      answer still equals the oracle.
 //
 // The dataset is generated and ingested through the real CSV->columns path so
-// the test also covers the converter and the mmap-backed store, not just the
+// the test also covers the converter and the on-disk column store, not just the
 // in-memory query layer. Size is irrelevant to the statistical claims; it is
 // chosen so the tree cracks into many partitions and a single query routinely
 // decomposes into several strata -- the regime where a grid-then-split index

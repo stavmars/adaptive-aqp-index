@@ -1,5 +1,6 @@
 #include "a3i/aqp/eager_materialize.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <span>
 #include <vector>
@@ -43,20 +44,30 @@ void materialize_all_summaries(const AdaptiveAccessPath& access_path,
     //
     // A single front-to-back sweep folds ALL measures of a row at once: the
     // row's accumulators are adjacent in the flat block (touched together),
-    // and the measure columns are read as parallel sequential streams that
-    // the kernel's readahead handles like a single scan each.
+    // and each measure column is consumed as a sequential stream of blocks —
+    // a zero-copy view when the column is resident, sequential reads the
+    // kernel's readahead turns into a full-bandwidth scan when it is on disk.
+    constexpr std::size_t kBlockRows = std::size_t{1} << 20;
     const std::size_t k = measure_count;
     std::vector<MomentStats> acc((static_cast<std::size_t>(max_id) + 1) * k);
+    std::vector<std::vector<double>>     scratch(k);
     std::vector<std::span<const double>> cols(k);
     for (std::size_t mid = 0; mid < k; ++mid) {
-        const auto m = static_cast<MeasureId>(mid);
-        store.advise_sequential(m);
-        cols[mid] = store.measure_column(m);
+        store.advise_sequential(static_cast<MeasureId>(mid));
     }
-    for (RowId r = 0; r < n; ++r) {
-        MomentStats* row_acc = &acc[static_cast<std::size_t>(owner[r]) * k];
+    for (std::size_t block = 0; block < n; block += kBlockRows) {
+        const std::size_t count = std::min(kBlockRows, n - block);
         for (std::size_t mid = 0; mid < k; ++mid) {
-            row_acc[mid].add_if_present(cols[mid][r]);
+            cols[mid] = store.read_rows(static_cast<MeasureId>(mid),
+                                        static_cast<RowId>(block), count,
+                                        scratch[mid]);
+        }
+        for (std::size_t i = 0; i < count; ++i) {
+            const RowId r = static_cast<RowId>(block + i);
+            MomentStats* row_acc = &acc[static_cast<std::size_t>(owner[r]) * k];
+            for (std::size_t mid = 0; mid < k; ++mid) {
+                row_acc[mid].add_if_present(cols[mid][i]);
+            }
         }
     }
 

@@ -65,11 +65,12 @@ struct CellConfig {
     /// different gather orders are never silently aggregated or compared.
     bool          sort_gather_by_row_id = true;
 
-    /// How the measure columns are backed: Mmap (out-of-core, the default) or
-    /// Eager (loaded fully resident, the in-memory regime). The orchestrator
-    /// derives this from the `mem` axis (`inmem` => Eager); it is recorded in
-    /// the sidecar for self-description. Eager is only valid uncapped.
-    MeasureStorage measure_storage = MeasureStorage::Mmap;
+    /// How the measure columns are backed: OnDisk (out-of-core, the default)
+    /// or Eager (loaded fully resident, the in-memory regime). The
+    /// orchestrator derives this from the `mem` axis (`inmem` => Eager); it is
+    /// recorded in the sidecar for self-description. Eager is only valid
+    /// uncapped.
+    MeasureStorage measure_storage = MeasureStorage::OnDisk;
 
     /// Outer repetition index; also the recorded sampling seed and the seed
     /// material that makes each run's sampling draws distinct yet reproducible.

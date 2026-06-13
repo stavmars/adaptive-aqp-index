@@ -253,9 +253,9 @@ TEST(BinaryColumnStore, GatherReturnsValuesInInputOrder) {
     EXPECT_DOUBLE_EQ(out[5], 200.0);
 }
 
-// --- Eager (in-memory) storage matches the mmap backing -----------------
+// --- Eager (in-memory) storage matches the on-disk backing ---------------
 
-TEST(BinaryColumnStore, EagerStorageMatchesMmap) {
+TEST(BinaryColumnStore, EagerStorageMatchesOnDisk) {
     TempDir tmp;
     const auto csv = tmp / "e.csv";
     {
@@ -276,32 +276,53 @@ TEST(BinaryColumnStore, EagerStorageMatchesMmap) {
     auto rep = a3i::run_parquet_to_columns(opts);
     ASSERT_EQ(rep.rows_written, 12u);
 
-    a3i::BinaryColumnStore mmap_store(rep.manifest_path);
+    a3i::BinaryColumnStore disk_store(rep.manifest_path);
     a3i::BinaryColumnStore eager_store(rep.manifest_path, /*selected=*/{},
                                        a3i::MeasureStorage::Eager);
 
-    ASSERT_EQ(eager_store.measure_count(), mmap_store.measure_count());
-    ASSERT_EQ(eager_store.row_count(),     mmap_store.row_count());
+    ASSERT_EQ(eager_store.measure_count(), disk_store.measure_count());
+    ASSERT_EQ(eager_store.row_count(),     disk_store.row_count());
 
-    for (std::size_t mi = 0; mi < mmap_store.measure_count(); ++mi) {
+    std::vector<double> scratch;
+    for (std::size_t mi = 0; mi < disk_store.measure_count(); ++mi) {
         const auto m = static_cast<a3i::MeasureId>(mi);
-        auto col_mmap  = mmap_store.measure_column(m);
+        auto col_disk  = disk_store.read_rows(m, 0, disk_store.row_count(), scratch);
         auto col_eager = eager_store.measure_column(m);
-        ASSERT_EQ(col_eager.size(), col_mmap.size());
-        for (std::size_t r = 0; r < col_mmap.size(); ++r) {
-            EXPECT_DOUBLE_EQ(col_eager[r], col_mmap[r]);
+        ASSERT_EQ(col_eager.size(), col_disk.size());
+        for (std::size_t r = 0; r < col_disk.size(); ++r) {
+            EXPECT_DOUBLE_EQ(col_eager[r], col_disk[r]);
             EXPECT_DOUBLE_EQ(
                 eager_store.measure_value(static_cast<a3i::RowId>(r), m),
-                mmap_store.measure_value(static_cast<a3i::RowId>(r), m));
+                disk_store.measure_value(static_cast<a3i::RowId>(r), m));
         }
     }
 
     // gather() over a scrambled order agrees value-for-value.
     std::array<a3i::RowId, 5> ids{9, 0, 4, 11, 2};
-    std::array<double, 5> got_mmap{}, got_eager{};
-    mmap_store.gather(/*m=*/1, ids, got_mmap);
+    std::array<double, 5> got_disk{}, got_eager{};
+    disk_store.gather(/*m=*/1, ids, got_disk);
     eager_store.gather(/*m=*/1, ids, got_eager);
-    EXPECT_EQ(got_eager, got_mmap);
+    EXPECT_EQ(got_eager, got_disk);
+
+    // gather_all reads every measure in one batch; agrees with both backings.
+    std::vector<std::vector<double>> all_disk, all_eager;
+    disk_store.gather_all(ids, all_disk);
+    eager_store.gather_all(ids, all_eager);
+    ASSERT_EQ(all_disk.size(), 2u);
+    EXPECT_EQ(all_disk, all_eager);
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+        EXPECT_DOUBLE_EQ(all_disk[1][i], got_disk[i]);
+    }
+
+    // read_rows under eager backing is a zero-copy subspan of the resident
+    // column (scratch untouched), and mid-column windows line up.
+    auto window = eager_store.read_rows(/*m=*/0, 3, 4, scratch);
+    ASSERT_EQ(window.size(), 4u);
+    EXPECT_DOUBLE_EQ(window[0], 30.0);
+    EXPECT_DOUBLE_EQ(window[3], 60.0);
+
+    // measure_column is an eager-only view; the on-disk backing refuses it.
+    EXPECT_THROW((void)disk_store.measure_column(0), std::logic_error);
 
     // advise_sequential is a harmless no-op on a resident column.
     EXPECT_NO_THROW(eager_store.advise_sequential(0));
@@ -311,7 +332,77 @@ TEST(BinaryColumnStore, EagerStorageMatchesMmap) {
                                         a3i::MeasureStorage::Eager);
     ASSERT_EQ(eager_subset.measure_count(), 1u);
     EXPECT_DOUBLE_EQ(eager_subset.measure_value(3, 0),
-                     mmap_store.measure_value(3, 1));
+                     disk_store.measure_value(3, 1));
+}
+
+// --- Batched on-disk gather, multi-page, randomized ----------------------
+//
+// Large enough that the gather spans many pages and coalesced ranges, with
+// ids drawn unsorted and with duplicates: the on-disk batch must agree
+// element-for-element with the eager array indexing.
+
+TEST(BinaryColumnStore, OnDiskGatherMatchesEagerAcrossPages) {
+    TempDir tmp;
+    const auto csv = tmp / "big.csv";
+    constexpr std::size_t kRows = 20'000;  // ~156 KiB per column, ~39 pages
+    {
+        std::string s = "x,m\n";
+        for (std::size_t i = 0; i < kRows; ++i) {
+            s += std::to_string(i) + "," + std::to_string(i * 3 + 1) + "\n";
+        }
+        write_text(csv, s);
+    }
+
+    a3i::ConvertOptions opts;
+    opts.input_parquet = to_parquet(csv, /*has_header=*/true);
+    opts.output_dir = tmp / "prep";
+    opts.dataset_id = "big";
+    opts.dimensions = {{"x", 0, 1e9}};
+    opts.measures   = {"m"};
+    auto rep = a3i::run_parquet_to_columns(opts);
+    ASSERT_EQ(rep.rows_written, kRows);
+
+    a3i::BinaryColumnStore disk_store(rep.manifest_path);
+    a3i::BinaryColumnStore eager_store(rep.manifest_path, /*selected=*/{},
+                                       a3i::MeasureStorage::Eager);
+
+    std::mt19937_64 rng(42);
+    std::uniform_int_distribution<a3i::RowId> pick(0, kRows - 1);
+
+    // Sparse unsorted draw with duplicates, plus a dense ascending run that
+    // exercises range merging and the per-range split.
+    std::vector<a3i::RowId> ids;
+    for (int i = 0; i < 5'000; ++i) ids.push_back(pick(rng));
+    ids.push_back(ids.front());                       // duplicate
+    for (a3i::RowId r = 1'000; r < 3'000; ++r) ids.push_back(r);
+
+    std::vector<double> got_disk(ids.size()), got_eager(ids.size());
+    disk_store.gather(/*m=*/0, ids, got_disk);
+    eager_store.gather(/*m=*/0, ids, got_eager);
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+        ASSERT_DOUBLE_EQ(got_disk[i], got_eager[i]) << "at index " << i
+            << " (row " << ids[i] << ")";
+    }
+
+    // Already-sorted input takes the no-permutation path; same agreement.
+    std::sort(ids.begin(), ids.end());
+    disk_store.gather(/*m=*/0, ids, got_disk);
+    eager_store.gather(/*m=*/0, ids, got_eager);
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+        ASSERT_DOUBLE_EQ(got_disk[i], got_eager[i]) << "at sorted index " << i;
+    }
+
+    // Block-sweep agreement: read_rows on disk equals the eager column.
+    std::vector<double> scratch;
+    auto eager_col = eager_store.measure_column(0);
+    for (std::size_t b = 0; b < kRows; b += 4'096) {
+        const std::size_t cnt = std::min<std::size_t>(4'096, kRows - b);
+        auto blk = disk_store.read_rows(0, static_cast<a3i::RowId>(b), cnt, scratch);
+        ASSERT_EQ(blk.size(), cnt);
+        for (std::size_t i = 0; i < cnt; ++i) {
+            ASSERT_DOUBLE_EQ(blk[i], eager_col[b + i]) << "row " << (b + i);
+        }
+    }
 }
 
 // --- Validation filters DROP rows; --max-rows caps after filtering ------

@@ -1,14 +1,16 @@
 #include "a3i/storage/binary_column_store.hpp"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <fstream>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <system_error>
 
 #include <fcntl.h>
-#include <sys/mman.h>
+#include <liburing.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -40,7 +42,62 @@ std::vector<double> read_double_file(const std::filesystem::path& path,
     return out;
 }
 
+// pread the exact byte range [off, off+len) or throw; loops over short reads.
+void pread_exact(int fd, void* buf, std::size_t len, std::uint64_t off) {
+    char* p = static_cast<char*>(buf);
+    while (len > 0) {
+        const ssize_t got = ::pread(fd, p, len, static_cast<off_t>(off));
+        if (got < 0) {
+            if (errno == EINTR) continue;
+            throw std::system_error(errno, std::generic_category(), "pread");
+        }
+        if (got == 0) throw std::runtime_error("pread: unexpected end of file");
+        p   += got;
+        off += static_cast<std::uint64_t>(got);
+        len -= static_cast<std::size_t>(got);
+    }
+}
+
+// Tuning for the batched on-disk gather. Ranges are page-aligned because the
+// device and page cache move whole pages anyway; only overlapping or exactly
+// adjacent page ranges are merged — reading through a gap of unneeded pages
+// trades bytes for fewer requests, and measured on the target device the
+// random-read rate does not drop with request count (it rises with density),
+// so over-reading only wastes bandwidth. A single range is capped so
+// coalescing cannot grow one read without bound. Ranges that fit a ring slot
+// are issued asynchronously with up to kRingDepth requests in flight —
+// scattered reads are latency-bound, so the device must see a deep queue to
+// deliver its random-read throughput. Ranges larger than a slot are dense
+// contiguous runs where the kernel's readahead already delivers full
+// bandwidth to a plain positional read.
+constexpr std::uint64_t kPageBytes     = 4096;
+constexpr std::uint64_t kMergeGapBytes = 0;
+constexpr std::uint64_t kMaxRangeBytes = 8u << 20;
+constexpr unsigned      kRingDepth     = 256;
+constexpr std::size_t   kSlotBytes     = 64 * 1024;
+
+// One coalesced read: file bytes [file_off, file_off+len) cover the sorted
+// gather positions [first, first+count).
+struct ReadRange {
+    std::uint64_t file_off = 0;
+    std::uint32_t len      = 0;
+    std::size_t   first    = 0;
+    std::size_t   count    = 0;
+};
+
 }  // namespace
+
+// Submission/completion context for batched reads. Owns the kernel ring and
+// the per-slot staging buffers; one per store, reused across gathers (setup
+// is not free, reads are frequent).
+struct BinaryColumnStore::IoRing {
+    io_uring          ring{};
+    bool              live = false;
+    std::vector<char> slots;  // kRingDepth * kSlotBytes staging bytes
+    ~IoRing() {
+        if (live) io_uring_queue_exit(&ring);
+    }
+};
 
 BinaryColumnStore::BinaryColumnStore(const std::filesystem::path& manifest_path,
                                      std::vector<MeasureId> selected_measures,
@@ -79,33 +136,25 @@ BinaryColumnStore::BinaryColumnStore(const std::filesystem::path& manifest_path,
         dim_columns_.push_back(read_double_file(path, manifest_.row_count));
     }
 
-    // The exposed measure columns are backed per the storage mode; either way
-    // a per-column handle (data pointer + length) lands in measure_views_, which
-    // every accessor indexes so the hot path never branches on the mode.
-    measure_views_.resize(exposed_measures_.size());
-
     if (storage_mode_ == MeasureStorage::Eager) {
         // In-memory backing: read each exposed column fully resident, exactly
         // as the dimensions are, so a read is a plain array index with no
-        // page-fault path. Meaningful only where the dataset fits in RAM.
+        // I/O path. Meaningful only where the dataset fits in RAM.
         measure_resident_.reserve(exposed_measures_.size());
         for (std::size_t i = 0; i < exposed_measures_.size(); ++i) {
             const auto& mz = manifest_.measures[exposed_measures_[i]];
             measure_resident_.push_back(
                 read_double_file(manifest_dir_ / mz.file, manifest_.row_count));
-            measure_views_[i] = {measure_resident_[i].data(), manifest_.row_count};
         }
         return;
     }
 
-    // Out-of-core backing: memory-map each exposed column rather than loading
-    // it. Sampling touches scattered rows; loading the whole column would waste
-    // memory and startup time. MADV_RANDOM tells the kernel not to read-ahead
-    // past the touched page — appropriate for point-lookups. Callers that will
-    // sweep a contiguous range should promote the region to MADV_SEQUENTIAL /
-    // MADV_WILLNEED before calling gather(). Only the exposed measures are
-    // mapped; the rest stay untouched on disk.
-    measure_maps_.resize(exposed_measures_.size());
+    // Out-of-core backing: keep each exposed column on disk behind an open
+    // descriptor. All reads are explicit — sequential block reads stream
+    // through the kernel's readahead, and scattered gathers are coalesced and
+    // issued as batches of asynchronous reads (see gather_ondisk). Only the
+    // exposed measures are opened; the rest stay untouched on disk.
+    measure_files_.resize(exposed_measures_.size());
     for (std::size_t i = 0; i < exposed_measures_.size(); ++i) {
         const auto& mz = manifest_.measures[exposed_measures_[i]];
         const auto path = manifest_dir_ / mz.file;
@@ -125,32 +174,13 @@ BinaryColumnStore::BinaryColumnStore(const std::filesystem::path& manifest_path,
             ::close(fd);
             throw std::runtime_error("measure file size mismatch: " + path.string());
         }
-
-        void* base = nullptr;
-        if (bytes > 0) {
-            base = ::mmap(nullptr, bytes, PROT_READ, MAP_SHARED, fd, 0);
-            if (base == MAP_FAILED) {
-                ::close(fd);
-                throw std::runtime_error("mmap failed: " + path.string() + ": " +
-                                         std::strerror(errno));
-            }
-            ::madvise(base, bytes, MADV_RANDOM);
-        }
-
-        auto& r = measure_maps_[i];
-        r.base   = base;
-        r.bytes  = bytes;
-        r.fd     = fd;
-        measure_views_[i] = {static_cast<const double*>(base), manifest_.row_count};
+        measure_files_[i] = {fd, bytes};
     }
 }
 
 BinaryColumnStore::~BinaryColumnStore() {
-    // Only the mmap backing owns OS resources; the resident vectors free
-    // themselves. measure_maps_ is empty in Eager mode.
-    for (auto& r : measure_maps_) {
-        if (r.base && r.bytes > 0) ::munmap(r.base, r.bytes);
-        if (r.fd  >= 0)            ::close(r.fd);
+    for (auto& c : measure_files_) {
+        if (c.fd >= 0) ::close(c.fd);
     }
 }
 
@@ -162,57 +192,300 @@ std::span<const double> BinaryColumnStore::dimension_column(DimensionId d) const
 }
 
 double BinaryColumnStore::measure_value(RowId r, MeasureId m) const {
-    if (m >= measure_views_.size()) {
+    if (m >= measure_count()) {
         throw std::out_of_range("measure_value: MeasureId out of range");
     }
-    const auto& view = measure_views_[m];
-    if (r >= view.length) {
+    if (r >= manifest_.row_count) {
         throw std::out_of_range("measure_value: RowId out of range");
     }
-    return view.data[r];
+    if (storage_mode_ == MeasureStorage::Eager) {
+        return measure_resident_[m][r];
+    }
+    double v = 0.0;
+    pread_exact(measure_files_[m].fd, &v, sizeof(double),
+                static_cast<std::uint64_t>(r) * sizeof(double));
+    return v;
 }
 
 void BinaryColumnStore::gather(MeasureId m,
                                std::span<const RowId> row_ids,
-                               std::span<double> out) const {
-    if (m >= measure_views_.size()) {
+                               std::span<double> out,
+                               bool already_sorted) const {
+    if (m >= measure_count()) {
         throw std::out_of_range("gather: MeasureId out of range");
     }
     if (row_ids.size() != out.size()) {
         throw std::invalid_argument("gather: row_ids and out must have equal size");
     }
-    const auto& view = measure_views_[m];
-
-    // Read in the order given by the caller; out[i] = value at row_ids[i].
-    // Reordering for read locality is the caller's responsibility and should
-    // be decided with measurements in hand.
-    for (std::size_t i = 0; i < row_ids.size(); ++i) {
-        const RowId r = row_ids[i];
-        if (r >= view.length) {
+    for (const RowId r : row_ids) {
+        if (r >= manifest_.row_count) {
             throw std::out_of_range("gather: RowId out of range");
         }
-        out[i] = view.data[r];
     }
+    if (row_ids.empty()) return;
+
+    if (storage_mode_ == MeasureStorage::Eager) {
+        const std::vector<double>& col = measure_resident_[m];
+        for (std::size_t i = 0; i < row_ids.size(); ++i) {
+            out[i] = col[row_ids[i]];
+        }
+        return;
+    }
+    const MeasureId ms[1]  = {m};
+    double* const   outs[1] = {out.data()};
+    gather_batch(ms, row_ids, outs, already_sorted);
+}
+
+void BinaryColumnStore::gather_all(std::span<const RowId> row_ids,
+                                   std::vector<std::vector<double>>& outs,
+                                   bool already_sorted) const {
+    const std::size_t k = measure_count();
+    const std::size_t n = row_ids.size();
+    for (const RowId r : row_ids) {
+        if (r >= manifest_.row_count) {
+            throw std::out_of_range("gather_all: RowId out of range");
+        }
+    }
+    outs.resize(k);
+    for (auto& o : outs) o.resize(n);
+    if (n == 0 || k == 0) return;
+
+    if (storage_mode_ == MeasureStorage::Eager) {
+        for (std::size_t m = 0; m < k; ++m) {
+            const std::vector<double>& col = measure_resident_[m];
+            for (std::size_t i = 0; i < n; ++i) {
+                outs[m][i] = col[row_ids[i]];
+            }
+        }
+        return;
+    }
+    std::vector<MeasureId> ms(k);
+    std::vector<double*>   ptrs(k);
+    for (std::size_t m = 0; m < k; ++m) {
+        ms[m]   = static_cast<MeasureId>(m);
+        ptrs[m] = outs[m].data();
+    }
+    gather_batch(ms, row_ids, ptrs.data(), already_sorted);
+}
+
+void BinaryColumnStore::gather_batch(std::span<const MeasureId> ms,
+                                     std::span<const RowId> row_ids,
+                                     double* const* outs,
+                                     bool already_sorted) const {
+    const std::size_t n = row_ids.size();
+    const std::size_t k = ms.size();
+    const std::uint64_t col_bytes = manifest_.row_count * sizeof(double);
+
+    // Visit ids in ascending file order so nearby rows coalesce into shared
+    // ranges; results are written through the permutation, so caller order is
+    // preserved. When the caller guarantees the ids are already ascending
+    // (`already_sorted`, e.g. the engine's k-way merge output) the O(n) order
+    // check and the sort are both skipped; otherwise the ids are sorted via an
+    // index permutation, leaving the caller's array untouched.
+    std::vector<std::size_t> order;
+    const bool sorted = already_sorted || std::is_sorted(row_ids.begin(), row_ids.end());
+    if (!sorted) {
+        order.resize(n);
+        std::iota(order.begin(), order.end(), std::size_t{0});
+        std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+            return row_ids[a] < row_ids[b];
+        });
+    }
+    const auto pos_of = [&](std::size_t j) { return sorted ? j : order[j]; };
+
+    // Coalesce the sorted byte offsets into page-aligned ranges, merging only
+    // overlapping or adjacent pages (reading through a gap of unneeded pages
+    // wastes bandwidth without reducing device time) and splitting when a
+    // dense run would exceed the per-range cap. The columns share one row id
+    // set, so one plan serves every requested measure.
+    std::vector<ReadRange> ranges;
+    for (std::size_t j = 0; j < n; ++j) {
+        const std::uint64_t off  = static_cast<std::uint64_t>(row_ids[pos_of(j)]) * sizeof(double);
+        const std::uint64_t pbeg = off & ~(kPageBytes - 1);
+        const std::uint64_t pend = std::min(col_bytes,
+                                            (off + sizeof(double) + kPageBytes - 1) & ~(kPageBytes - 1));
+        if (!ranges.empty()) {
+            ReadRange& cur = ranges.back();
+            const std::uint64_t cur_end = cur.file_off + cur.len;
+            if (pbeg <= cur_end + kMergeGapBytes &&
+                pend - cur.file_off <= kMaxRangeBytes) {
+                if (pend > cur_end) {
+                    cur.len = static_cast<std::uint32_t>(pend - cur.file_off);
+                }
+                ++cur.count;
+                continue;
+            }
+        }
+        ranges.push_back({pbeg, static_cast<std::uint32_t>(pend - pbeg), j, 1});
+    }
+
+    // Copy one finished range's values out of a staging buffer into caller
+    // positions for one column.
+    const auto scatter = [&](std::size_t c, const ReadRange& rg, const char* base) {
+        for (std::size_t j = rg.first; j < rg.first + rg.count; ++j) {
+            const std::size_t   pos = pos_of(j);
+            const std::uint64_t off = static_cast<std::uint64_t>(row_ids[pos]) * sizeof(double);
+            double v;
+            std::memcpy(&v, base + (off - rg.file_off), sizeof(double));
+            outs[c][pos] = v;
+        }
+    };
+
+    // The ring is shared across gathers; set it up once. If the kernel
+    // interface is unavailable every range is read synchronously instead —
+    // same plan, same results, no queue depth.
+    if (!ring_init_attempted_) {
+        ring_init_attempted_ = true;
+        auto r = std::make_unique<IoRing>();
+        if (io_uring_queue_init(kRingDepth, &r->ring, 0) == 0) {
+            r->live = true;
+            ring_ = std::move(r);
+        }
+    }
+
+    // Ranges wider than a ring slot are dense near-sequential runs: a plain
+    // positional read already streams them at readahead bandwidth, and keeping
+    // them out of the ring keeps the slot buffers small and fixed.
+    std::vector<char> big;
+    for (const ReadRange& rg : ranges) {
+        if (rg.len <= kSlotBytes && ring_) continue;
+        if (big.size() < rg.len) big.resize(rg.len);
+        for (std::size_t c = 0; c < k; ++c) {
+            pread_exact(measure_files_[ms[c]].fd, big.data(), rg.len, rg.file_off);
+            scatter(c, rg, big.data());
+        }
+    }
+    if (!ring_) return;
+
+    // Slot-sized ranges go through the ring as one task per (range, column),
+    // interleaved across columns, with a sliding window: completions are
+    // scattered out and their slots reissued immediately, so the device keeps
+    // a full queue from first submission to last drain instead of stalling on
+    // batch barriers.
+    std::vector<std::size_t> small;
+    small.reserve(ranges.size());
+    for (std::size_t i = 0; i < ranges.size(); ++i) {
+        if (ranges[i].len <= kSlotBytes) small.push_back(i);
+    }
+    const std::size_t total = small.size() * k;
+    if (total == 0) return;
+
+    io_uring* ring = &ring_->ring;
+    if (ring_->slots.size() < static_cast<std::size_t>(kRingDepth) * kSlotBytes) {
+        ring_->slots.resize(static_cast<std::size_t>(kRingDepth) * kSlotBytes);
+    }
+    char* slots = ring_->slots.data();
+
+    std::vector<std::size_t>   slot_task(kRingDepth, 0);
+    std::vector<std::uint32_t> slot_filled(kRingDepth, 0);
+    std::vector<unsigned>      free_slots(kRingDepth);
+    std::iota(free_slots.begin(), free_slots.end(), 0u);
+
+    std::size_t next_task   = 0, done = 0;
+    unsigned    inflight    = 0;
+    unsigned    unsubmitted = 0;  // queued SQEs not yet handed to the kernel
+
+    const auto submit_task = [&](unsigned slot, std::size_t task,
+                                 std::uint32_t already) {
+        const ReadRange& rg = ranges[small[task / k]];
+        const int        fd = measure_files_[ms[task % k]].fd;
+        io_uring_sqe* sqe = io_uring_get_sqe(ring);
+        if (sqe == nullptr) {
+            // Submission queue full of not-yet-submitted entries: hand them
+            // to the kernel and retry (cannot recurse — the queue is empty
+            // after a successful flush).
+            const int rc = io_uring_submit(ring);
+            if (rc < 0) throw std::system_error(-rc, std::generic_category(), "io_uring_submit");
+            unsubmitted = 0;
+            sqe = io_uring_get_sqe(ring);
+            if (sqe == nullptr) throw std::runtime_error("gather: submission queue stuck");
+        }
+        io_uring_prep_read(sqe, fd, slots + static_cast<std::size_t>(slot) * kSlotBytes + already,
+                           rg.len - already,
+                           static_cast<off_t>(rg.file_off + already));
+        io_uring_sqe_set_data64(sqe, slot);
+        slot_task[slot]   = task;
+        slot_filled[slot] = already;
+        ++unsubmitted;
+    };
+
+    const auto handle_cqe = [&](io_uring_cqe* cqe) {
+        const auto slot = static_cast<unsigned>(io_uring_cqe_get_data64(cqe));
+        const int  res  = cqe->res;
+        io_uring_cqe_seen(ring, cqe);
+        if (res < 0) throw std::system_error(-res, std::generic_category(), "io_uring read");
+        if (res == 0) throw std::runtime_error("gather: unexpected end of file");
+        const std::size_t task = slot_task[slot];
+        const ReadRange&  rg   = ranges[small[task / k]];
+        slot_filled[slot] += static_cast<std::uint32_t>(res);
+        if (slot_filled[slot] < rg.len) {
+            submit_task(slot, task, slot_filled[slot]);  // short read: continue
+            return;
+        }
+        scatter(task % k, rg, slots + static_cast<std::size_t>(slot) * kSlotBytes);
+        free_slots.push_back(slot);
+        --inflight;
+        ++done;
+    };
+
+    while (done < total) {
+        while (inflight < kRingDepth && next_task < total && !free_slots.empty()) {
+            const unsigned slot = free_slots.back();
+            free_slots.pop_back();
+            submit_task(slot, next_task++, 0);
+            ++inflight;
+        }
+        if (unsubmitted > 0) {
+            const int rc = io_uring_submit(ring);
+            if (rc < 0) throw std::system_error(-rc, std::generic_category(), "io_uring_submit");
+            unsubmitted = 0;
+        }
+        io_uring_cqe* cqe = nullptr;
+        const int rc = io_uring_wait_cqe(ring, &cqe);
+        if (rc < 0) throw std::system_error(-rc, std::generic_category(), "io_uring_wait_cqe");
+        handle_cqe(cqe);
+        // Drain whatever else has already completed before topping up again.
+        while (io_uring_peek_cqe(ring, &cqe) == 0) handle_cqe(cqe);
+    }
+}
+
+std::span<const double> BinaryColumnStore::read_rows(MeasureId m, RowId begin,
+                                                     std::size_t count,
+                                                     std::vector<double>& scratch) const {
+    if (m >= measure_count()) {
+        throw std::out_of_range("read_rows: MeasureId out of range");
+    }
+    if (static_cast<std::uint64_t>(begin) + count > manifest_.row_count) {
+        throw std::out_of_range("read_rows: row range out of bounds");
+    }
+    if (count == 0) return {};
+    if (storage_mode_ == MeasureStorage::Eager) {
+        return std::span<const double>(measure_resident_[m]).subspan(begin, count);
+    }
+    scratch.resize(count);
+    pread_exact(measure_files_[m].fd, scratch.data(), count * sizeof(double),
+                static_cast<std::uint64_t>(begin) * sizeof(double));
+    return std::span<const double>(scratch.data(), count);
 }
 
 std::span<const double> BinaryColumnStore::measure_column(MeasureId m) const {
-    if (m >= measure_views_.size()) {
+    if (m >= measure_count()) {
         throw std::out_of_range("measure_column: MeasureId out of range");
     }
-    const auto& view = measure_views_[m];
-    if (view.data == nullptr || view.length == 0) return {};
-    return std::span<const double>(view.data, view.length);
+    if (storage_mode_ != MeasureStorage::Eager) {
+        throw std::logic_error(
+            "measure_column: column is on disk; sweep it in blocks with read_rows");
+    }
+    return std::span<const double>(measure_resident_[m]);
 }
 
 void BinaryColumnStore::advise_sequential(MeasureId m) const {
-    if (m >= measure_views_.size()) {
+    if (m >= measure_count()) {
         throw std::out_of_range("advise_sequential: MeasureId out of range");
     }
-    // Resident columns have nothing mapped to advise.
-    if (storage_mode_ != MeasureStorage::Mmap) return;
-    const auto& reg = measure_maps_[m];
-    if (reg.base == nullptr || reg.bytes == 0) return;
-    ::madvise(reg.base, reg.bytes, MADV_SEQUENTIAL);
+    // Resident columns have no file access to advise.
+    if (storage_mode_ != MeasureStorage::OnDisk) return;
+    ::posix_fadvise(measure_files_[m].fd, 0, 0, POSIX_FADV_SEQUENTIAL);
 }
 
 const GlobalMeasureStats& BinaryColumnStore::global_stats(MeasureId m) const {

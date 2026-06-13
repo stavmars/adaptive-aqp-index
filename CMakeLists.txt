@@ -34,6 +34,10 @@ FetchContent_MakeAvailable(nlohmann_json)
 find_package(Arrow REQUIRED)
 find_package(Parquet REQUIRED)
 
+# liburing backs the batched asynchronous reads in the on-disk column store.
+find_library(URING_LIBRARY uring REQUIRED)
+find_path(URING_INCLUDE_DIR liburing.h REQUIRED)
+
 # ---- Core library --------------------------------------------------------
 # Static library carrying compiled units shared by apps and tests.
 add_library(a3i_core STATIC
@@ -69,7 +73,9 @@ target_link_libraries(a3i_core PUBLIC
     nlohmann_json::nlohmann_json
     Arrow::arrow_shared
     Parquet::parquet_shared
+    ${URING_LIBRARY}
 )
+target_include_directories(a3i_core PRIVATE ${URING_INCLUDE_DIR})
 target_compile_features(a3i_core PUBLIC cxx_std_20)
 
 # ---- Apps ----------------------------------------------------------------

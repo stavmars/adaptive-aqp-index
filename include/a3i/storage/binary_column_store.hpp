@@ -5,22 +5,26 @@
 // Dimensions load eagerly (the access path needs them in RAM for
 // cracking). Measure columns are backed one of two ways, chosen at open time
 // (`MeasureStorage`), with an identical by-RowId access contract either way:
-//   - Mmap (default, out-of-core): each column is memory-mapped so a lookup is
-//     an O(1) page touch (`MADV_RANDOM` by default; callers that scan ranges
-//     can promote a region to `MADV_WILLNEED`/`MADV_SEQUENTIAL` via the
-//     prefetch helper). This is the only backing that lets a column exceed RAM.
+//   - OnDisk (default, out-of-core): each column stays on disk behind an open
+//     file descriptor and is read with explicit I/O. Scattered batches
+//     (`gather`) are sorted, coalesced into page-aligned ranges, and issued
+//     as asynchronous batched reads so many requests are in flight at once —
+//     the queue depth SSDs need to deliver their random-read throughput.
+//     Sequential block reads (`read_rows`) use plain positional reads that
+//     the kernel's readahead streams at full bandwidth. This is the only
+//     backing that lets a column exceed RAM.
 //   - Eager (in-memory): each column is read fully resident at open time, like
-//     the dimensions, so a lookup is a plain array index with no page-fault
-//     path. Meaningful only when the dataset fits in RAM.
+//     the dimensions, so a lookup is a plain array index with no I/O path.
+//     Meaningful only when the dataset fits in RAM.
 //
-// `gather()` reads a batch of measure values in the order the caller asks for.
-// Any reordering for read locality (e.g. sorting RowIds ascending, or
-// k-way-merging streams from multiple partitions) is the caller's choice and
-// happens upstream.
+// `gather()` reads a batch of measure values and returns them in the order
+// the caller asked for (`out[i]` = value at `row_ids[i]`), regardless of how
+// the reads are scheduled internally.
 
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <span>
@@ -33,18 +37,17 @@
 namespace a3i {
 
 /// How the exposed measure columns are backed. The choice does not affect the
-/// values returned by any accessor — only whether reads fault in mmap'd pages
-/// or index a resident array (see the file header).
+/// values returned by any accessor — only whether reads go to disk through
+/// explicit I/O or index a resident array (see the file header).
 enum class MeasureStorage {
-    Mmap,   ///< Memory-map each column (out-of-core; the default).
-    Eager,  ///< Load each column fully resident at open time (in-memory).
+    OnDisk,  ///< Keep each column on disk; explicit batched I/O (the default).
+    Eager,   ///< Load each column fully resident at open time (in-memory).
 };
 
 class BinaryColumnStore {
 public:
     /// Open a prepared dataset by manifest path. Eagerly loads dimensions
-    /// into memory; backs the exposed measure columns per `measure_storage`
-    /// (Mmap with MADV_RANDOM by default, or a fully-resident Eager load).
+    /// into memory; backs the exposed measure columns per `measure_storage`.
     ///
     /// `selected_measures` chooses which measure columns to expose, in the
     /// given order: the store then reports `measure_count()` of them and the
@@ -60,7 +63,7 @@ public:
     /// vector per exposed column); the access contract is otherwise identical.
     explicit BinaryColumnStore(const std::filesystem::path& manifest_path,
                                std::vector<MeasureId> selected_measures = {},
-                               MeasureStorage measure_storage = MeasureStorage::Mmap);
+                               MeasureStorage measure_storage = MeasureStorage::OnDisk);
     ~BinaryColumnStore();
 
     BinaryColumnStore(const BinaryColumnStore&) = delete;
@@ -76,59 +79,93 @@ public:
     /// In-memory contiguous view of one dimension column.
     std::span<const double> dimension_column(DimensionId d) const;
 
-    /// O(1) random access to one measure column (a mapped page touch, or a
-    /// resident array index when the column is loaded eager).
+    /// Random access to one measure value (a resident array index when the
+    /// column is loaded eager, a single positional read when on disk). For
+    /// more than a handful of rows, `gather` is the right call.
     double measure_value(RowId r, MeasureId m) const;
 
-    /// Read one measure value per RowId in the order given. `out[i]` receives
-    /// the value at `row_ids[i]`; `row_ids` and `out` must have equal length.
-    /// No internal reordering: callers that want sequential page access
-    /// should sort or k-way-merge their RowIds before calling.
+    /// Read one measure value per RowId; `out[i]` receives the value at
+    /// `row_ids[i]`. `row_ids` and `out` must have equal length. Ids may be
+    /// in any order and may repeat. On-disk reads are internally sorted,
+    /// coalesced into page-aligned ranges, and issued as a batch of
+    /// asynchronous reads with many requests in flight; results are scattered
+    /// back into caller order. Not safe to call concurrently on one store.
+    ///
+    /// `already_sorted` lets a caller that knows its ids are ascending (e.g.
+    /// the engine's k-way merge output when gather-sorting is on) skip the
+    /// internal order check; passing it wrongly produces incorrect coalescing,
+    /// so leave it false unless the ids are provably sorted.
     void gather(MeasureId m,
                 std::span<const RowId> row_ids,
-                std::span<double> out) const;
+                std::span<double> out,
+                bool already_sorted = false) const;
 
-    /// Whole measure column as a contiguous span. Under mmap, reading an
-    /// element faults its page in on first touch; under eager backing it is
-    /// already resident. Intended for one-shot front-to-back sweeps that want
-    /// to avoid the per-element bounds checks of `measure_value`/`gather`.
-    /// Empty if the column has zero rows.
+    /// Read every exposed measure at each RowId: `outs[m][i]` receives
+    /// measure `m`'s value at `row_ids[i]` (`outs` is resized to
+    /// `measure_count()` vectors of `row_ids.size()`). On disk, all measures'
+    /// reads share one submission schedule, so the device sees one deep queue
+    /// instead of one drain-and-refill pass per measure. Same ordering and
+    /// concurrency contract as `gather`. `already_sorted` is as in `gather`.
+    void gather_all(std::span<const RowId> row_ids,
+                    std::vector<std::vector<double>>& outs,
+                    bool already_sorted = false) const;
+
+    /// Read `count` consecutive rows of measure `m` starting at `begin`.
+    /// Returns a view of the values: a zero-copy subspan of the resident
+    /// column under eager backing, or `scratch` filled by sequential
+    /// positional reads when on disk (resized as needed). Intended for
+    /// front-to-back block sweeps; pair with `advise_sequential`.
+    std::span<const double> read_rows(MeasureId m, RowId begin,
+                                      std::size_t count,
+                                      std::vector<double>& scratch) const;
+
+    /// Whole measure column as a contiguous span. Only valid under eager
+    /// backing (the data is resident); throws `std::logic_error` for an
+    /// on-disk column — sweep those in blocks with `read_rows` instead.
     std::span<const double> measure_column(MeasureId m) const;
 
-    /// Read-ahead hint for a full front-to-back scan of measure `m`'s column
-    /// (kernel `MADV_SEQUENTIAL`): pages may be dropped behind the read cursor,
-    /// so use it only for a dense one-pass sweep, never for sampling. A no-op
-    /// when the column is held resident (nothing is mapped).
+    /// Read-ahead hint for a full front-to-back sweep of measure `m`'s column
+    /// (kernel sequential-access advice on the file descriptor). A no-op when
+    /// the column is held resident.
     void advise_sequential(MeasureId m) const;
 
     /// Per-measure stats from the manifest (no scan).
     const GlobalMeasureStats& global_stats(MeasureId m) const;
 
 private:
-    // Memory-mapped backing for one measure column (Mmap mode only). Kept so
-    // the mapping can be advised and unmapped; the hot-path handle that reads
-    // give out lives in measure_views_.
-    struct MmapRegion {
-        void*       base = nullptr;
-        std::size_t bytes = 0;
-        int         fd = -1;
+    // On-disk backing for one measure column: an open read-only descriptor
+    // plus the exact payload size (rows * sizeof(double)), which bounds every
+    // read so a truncated file is caught rather than silently zero-filled.
+    struct OnDiskColumn {
+        int           fd = -1;
+        std::uint64_t bytes = 0;
     };
 
-    // Backing-agnostic, hot-path handle into one exposed measure column,
-    // whether it is memory-mapped or held resident.
-    struct MeasureView {
-        const double* data = nullptr;
-        std::size_t   length = 0;   ///< In elements, not bytes.
-    };
+    struct IoRing;  // Batched-read submission context (defined in the .cpp).
 
     Manifest manifest_;
     std::filesystem::path manifest_dir_;
     std::vector<std::vector<double>> dim_columns_;       ///< Eager copies.
-    MeasureStorage                   storage_mode_ = MeasureStorage::Mmap;
-    std::vector<MmapRegion>          measure_maps_;      ///< Mmap mode: one per exposed measure.
+    MeasureStorage                   storage_mode_ = MeasureStorage::OnDisk;
+    std::vector<OnDiskColumn>        measure_files_;     ///< OnDisk mode: one per exposed measure.
     std::vector<std::vector<double>> measure_resident_;  ///< Eager mode: one per exposed measure.
-    std::vector<MeasureView>         measure_views_;     ///< Always: hot-path handle per exposed measure.
     std::vector<MeasureId>           exposed_measures_;  ///< Local id -> manifest measure index.
+
+    // Submission context for batched on-disk gathers. Lazily initialized on
+    // first use; null if the kernel interface is unavailable, in which case
+    // gathers fall back to synchronous positional reads over the same
+    // coalesced ranges. Mutable: scheduling reads does not change any value
+    // an accessor returns.
+    mutable std::unique_ptr<IoRing> ring_;
+    mutable bool                    ring_init_attempted_ = false;
+
+    // Shared on-disk batch path: one coalesced read plan over the (sorted)
+    // row ids, executed for each requested measure column; `outs[c][i]`
+    // receives measure `ms[c]`'s value at `row_ids[i]`.
+    void gather_batch(std::span<const MeasureId> ms,
+                      std::span<const RowId> row_ids,
+                      double* const* outs,
+                      bool already_sorted) const;
 };
 
 }  // namespace a3i

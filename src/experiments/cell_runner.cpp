@@ -371,7 +371,7 @@ CellReport run_cell(const CellConfig& config) {
         meta["stochastic_cracking"]  = config.stochastic_cracking;
         meta["sort_gather_by_row_id"] = config.sort_gather_by_row_id;
         meta["measure_storage"]      =
-            config.measure_storage == MeasureStorage::Eager ? "eager" : "mmap";
+            config.measure_storage == MeasureStorage::Eager ? "eager" : "ondisk";
         meta["run_id"]               = config.run_id;
         meta["sampling_seed"]        = config.run_id;
         meta["max_queries"]          = config.max_queries;

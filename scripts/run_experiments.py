@@ -488,9 +488,10 @@ def run_cell(a3i_run: Path, cell: Cell, manifest: Path, workload_csv: Path,
 
     # Gather sorting: 'auto' ties it to the storage mode -- off when measures
     # are resident (the sort buys nothing and costs a per-round sort), on when
-    # they are memory-mapped (ascending row ids keep the fault stream
-    # near-sequential). 'on'/'off' force it. Recorded in runmeta; the validator
-    # refuses to pool cells that differ on it.
+    # they are read from disk (ascending row ids coalesce into shared page
+    # ranges so the batched reads move fewer, larger requests). 'on'/'off'
+    # force it. Recorded in runmeta; the validator refuses to pool cells that
+    # differ on it.
     if sort_gather == "off" or (sort_gather == "auto" and
                                 mem_is_in_memory(cell.mem)):
         cmd += ["--no-sort-gather"]
@@ -655,11 +656,12 @@ def main() -> int:
                     default="auto",
                     help="measure-gather sort policy. 'auto' (default): OFF for "
                          "in-memory (inmem) cells, where resident columns make "
-                         "the sort pure overhead, and ON for memory-mapped "
-                         "cells, where ascending row ids keep the page-fault "
-                         "stream near-sequential. 'on'/'off' force one policy "
-                         "for every cell. The choice is recorded in runmeta; "
-                         "the validator refuses to pool cells that differ on it.")
+                         "the sort pure overhead, and ON for on-disk cells, "
+                         "where ascending row ids coalesce into shared page "
+                         "ranges for the batched reads. 'on'/'off' force one "
+                         "policy for every cell. The choice is recorded in "
+                         "runmeta; the validator refuses to pool cells that "
+                         "differ on it.")
     ap.add_argument("--drop-caches-cmd", default=os.environ.get("A3I_DROP_CACHES_CMD"),
                     help="optional shell hook run before each cell to flush the "
                          "WHOLE-MACHINE page cache (e.g. a sudo-granted helper "
