@@ -284,7 +284,8 @@ void BinaryColumnStore::gather(MeasureId m,
 
 void BinaryColumnStore::gather_all(std::span<const RowId> row_ids,
                                    std::vector<std::vector<double>>& outs,
-                                   bool already_sorted) const {
+                                   bool already_sorted,
+                                   GatherPathStats* path_stats) const {
     const std::size_t k = measure_count();
     const std::size_t n = row_ids.size();
     for (const RowId r : row_ids) {
@@ -311,13 +312,14 @@ void BinaryColumnStore::gather_all(std::span<const RowId> row_ids,
         ms[m]   = static_cast<MeasureId>(m);
         ptrs[m] = outs[m].data();
     }
-    gather_batch(ms, row_ids, ptrs.data(), already_sorted);
+    gather_batch(ms, row_ids, ptrs.data(), already_sorted, path_stats);
 }
 
 void BinaryColumnStore::gather_batch(std::span<const MeasureId> ms,
                                      std::span<const RowId> row_ids,
                                      double* const* outs,
-                                     bool already_sorted) const {
+                                     bool already_sorted,
+                                     GatherPathStats* path_stats) const {
     const std::size_t n = row_ids.size();
     const std::size_t k = ms.size();
     const std::uint64_t col_bytes = manifest_.row_count * sizeof(double);
@@ -357,9 +359,11 @@ void BinaryColumnStore::gather_batch(std::span<const MeasureId> ms,
     const double touched_fraction =
         -std::expm1(-frac * static_cast<double>(kRowsPerPage));  // 1 - e^(-frac*512)
     if (span_pages > 0 && touched_fraction >= random_vs_sequential_bw()) {
+        if (path_stats != nullptr) path_stats->scan_rows += n;
         scan_span(ms, row_ids, outs, order, lo, span_rows);
         return;
     }
+    if (path_stats != nullptr) path_stats->gather_rows += n;
 
     // Coalesce the sorted byte offsets into page-aligned ranges, merging only
     // overlapping or adjacent pages (reading through a gap of unneeded pages

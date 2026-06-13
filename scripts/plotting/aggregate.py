@@ -51,9 +51,16 @@ def cost_summary(frame: pd.DataFrame) -> pd.DataFrame:
         lat_p95=("latency_ms", lambda s: s.quantile(0.95)),
         lat_p99=("latency_ms", lambda s: s.quantile(0.99)),
         total_reads=("measure_reads", "sum"),
+        scan_path_rows=("scan_path_rows", "sum"),
+        gather_path_rows=("gather_path_rows", "sum"),
         init_ms=("init_ms", "median"),
     ).reset_index()
     out["cum_ms"] = out["init_ms"] + out["total_latency_ms"]
+    # Fraction of on-disk rows the cost model served by the sequential-scan
+    # path (vs scattered gather). NaN for an all-in-memory cell, which reads
+    # neither way. Telemetry for the on-disk experiment.
+    disk_rows = out["scan_path_rows"] + out["gather_path_rows"]
+    out["scan_frac"] = (out["scan_path_rows"] / disk_rows).where(disk_rows > 0)
     return out
 
 

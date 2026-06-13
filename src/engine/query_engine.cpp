@@ -218,8 +218,13 @@ void QueryEngine::read_round(const std::vector<std::uint64_t>& targets,
     std::vector<std::vector<double>> vals;
     // The k-way merge above yields globally ascending ids exactly when
     // gather-sorting is enabled (each merged cursor is then itself sorted);
-    // pass that through so the store skips re-checking the order.
-    store_.gather_all(ids, vals, config_.sort_gather_by_row_id);
+    // pass that through so the store skips re-checking the order. The store
+    // reports how it served this batch (scattered gather vs sequential scan);
+    // accumulate the split across rounds for the on-disk access-path metric.
+    GatherPathStats path{};
+    store_.gather_all(ids, vals, config_.sort_gather_by_row_id, &path);
+    metrics.scan_path_rows   += path.scan_rows;
+    metrics.gather_path_rows += path.gather_rows;
     for (MeasureId mid = 0; mid < measure_count_; ++mid) {
         metrics.measure_reads += ids.size();
         for (std::size_t i = 0; i < ids.size(); ++i) {

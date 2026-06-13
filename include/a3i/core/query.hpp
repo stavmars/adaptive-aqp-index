@@ -107,6 +107,18 @@ struct QueryMetrics {
     /// exactification; for the scan oracle, every qualifying row).
     std::uint64_t exactified_rows  = 0;
 
+    // --- Access-path split (on-disk only) ------------------------------------
+    // How the rows read above were fetched from disk, chosen per batch by the
+    // store's cost model: a scattered gather of just the wanted pages, or a
+    // sequential scan of their span when the rows are dense enough that
+    // streaming beats scattering. Counted as distinct rows (a batch picks one
+    // path for all measures), so scan_path_rows + gather_path_rows tracks the
+    // rows actually read from disk, independent of measure_count. Both stay 0
+    // for an in-memory (eager) store, which has no I/O path. Telemetry for the
+    // on-disk experiment; does not affect any answer.
+    std::uint64_t scan_path_rows   = 0;
+    std::uint64_t gather_path_rows = 0;
+
     // --- Decomposition frontier (per-partition counts) -----------------------
     // The descent stops at a frontier of partitions and emits each as one
     // contributor or stratum. These are counted ONCE PER PARTITION (not per

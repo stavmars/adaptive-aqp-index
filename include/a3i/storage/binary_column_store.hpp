@@ -44,6 +44,16 @@ enum class MeasureStorage {
     Eager,   ///< Load each column fully resident at open time (in-memory).
 };
 
+/// How a single on-disk batch was served, split by access path (see the
+/// cost model in the .cpp). Reports distinct rows, not row*measure reads: a
+/// batch picks one path for all its measures, so the split is per row. Both
+/// counts stay zero for an eager (in-memory) store, which has no I/O path.
+/// Callers accumulate these across a query to report the scan/gather mix.
+struct GatherPathStats {
+    std::uint64_t scan_rows   = 0;  ///< Rows served by the sequential-scan path.
+    std::uint64_t gather_rows = 0;  ///< Rows served by the scattered-gather path.
+};
+
 class BinaryColumnStore {
 public:
     /// Open a prepared dataset by manifest path. Eagerly loads dimensions
@@ -106,9 +116,15 @@ public:
     /// reads share one submission schedule, so the device sees one deep queue
     /// instead of one drain-and-refill pass per measure. Same ordering and
     /// concurrency contract as `gather`. `already_sorted` is as in `gather`.
+    ///
+    /// If `path_stats` is non-null it receives how this batch was served,
+    /// split by access path (scan vs scattered gather); see `GatherPathStats`.
+    /// It is left untouched for an eager store (no I/O path). Telemetry only —
+    /// the values returned are identical with or without it.
     void gather_all(std::span<const RowId> row_ids,
                     std::vector<std::vector<double>>& outs,
-                    bool already_sorted = false) const;
+                    bool already_sorted = false,
+                    GatherPathStats* path_stats = nullptr) const;
 
     /// Read `count` consecutive rows of measure `m` starting at `begin`.
     /// Returns a view of the values: a zero-copy subspan of the resident
@@ -161,11 +177,13 @@ private:
 
     // Shared on-disk batch path: one coalesced read plan over the (sorted)
     // row ids, executed for each requested measure column; `outs[c][i]`
-    // receives measure `ms[c]`'s value at `row_ids[i]`.
+    // receives measure `ms[c]`'s value at `row_ids[i]`. If `path_stats` is
+    // non-null, records which access path this batch took (scan vs gather).
     void gather_batch(std::span<const MeasureId> ms,
                       std::span<const RowId> row_ids,
                       double* const* outs,
-                      bool already_sorted) const;
+                      bool already_sorted,
+                      GatherPathStats* path_stats = nullptr) const;
 
     // Sequential-scan path for gather_batch: when the wanted rows are dense
     // enough over their [lo, lo+span_rows) span that a streaming scan beats a

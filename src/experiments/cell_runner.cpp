@@ -38,7 +38,7 @@ constexpr const char* kHeader =
     "sampling_seed,latency_ms,measure_reads,sampled_rows,"
     "exactified_rows,frontier_partitions,partitions_refined,exact_contributors,"
     "reusable_sampled_strata,reusable_absent_strata,query_local_strata,"
-    "adaptive_rounds";
+    "adaptive_rounds,scan_path_rows,gather_path_rows";
 
 // Locale-independent, byte-stable, round-tripping double formatting.
 std::string fmt(double v) {
@@ -222,7 +222,8 @@ void write_row(std::ofstream& out, std::uint64_t ordinal, const std::string& met
         << m.exactified_rows << ',' << m.frontier_partitions << ','
         << m.partitions_refined << ',' << m.exact_contributors << ','
         << m.reusable_sampled_strata << ',' << m.reusable_absent_strata << ','
-        << m.query_local_strata << ',' << m.adaptive_rounds << '\n';
+        << m.query_local_strata << ',' << m.adaptive_rounds << ','
+        << m.scan_path_rows << ',' << m.gather_path_rows << '\n';
 }
 
 // Distinct yet reproducible sampling seed material per (run, query). For run 0
