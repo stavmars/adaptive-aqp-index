@@ -166,6 +166,18 @@ private:
                       std::span<const RowId> row_ids,
                       double* const* outs,
                       bool already_sorted) const;
+
+    // Sequential-scan path for gather_batch: when the wanted rows are dense
+    // enough over their [lo, lo+span_rows) span that a streaming scan beats a
+    // scattered gather (see kRandomVsSequentialBw), read the span in blocks and
+    // pick the wanted values. `order` is the ascending permutation of `row_ids`
+    // (empty when `row_ids` is already ascending); `outs[c][orig]` receives
+    // measure `ms[c]`'s value at the original caller position.
+    void scan_span(std::span<const MeasureId> ms,
+                   std::span<const RowId> row_ids,
+                   double* const* outs,
+                   std::span<const std::size_t> order,
+                   RowId lo, std::uint64_t span_rows) const;
 };
 
 }  // namespace a3i

@@ -405,6 +405,65 @@ TEST(BinaryColumnStore, OnDiskGatherMatchesEagerAcrossPages) {
     }
 }
 
+// --- Dense gather takes the sequential-scan path, still exact -----------
+//
+// A row set dense enough over its [min,max] span (here a large contiguous
+// run, ~100% of the span's pages) crosses the gather-vs-scan crossover, so
+// gather_batch reads the span sequentially and picks values rather than
+// issuing scattered reads. The result must still match the eager backing
+// value-for-value, in every order, with duplicates, across all measures.
+
+TEST(BinaryColumnStore, OnDiskDenseGatherUsesScanPathAndMatchesEager) {
+    TempDir tmp;
+    const auto csv = tmp / "dense.csv";
+    constexpr std::size_t kRows = 50'000;  // multi-block span per column
+    {
+        std::string s = "x,m0,m1\n";
+        for (std::size_t i = 0; i < kRows; ++i) {
+            s += std::to_string(i) + "," + std::to_string(i * 2 + 1) + "," +
+                 std::to_string(static_cast<double>(i) * 0.25) + "\n";
+        }
+        write_text(csv, s);
+    }
+
+    a3i::ConvertOptions opts;
+    opts.input_parquet = to_parquet(csv, /*has_header=*/true);
+    opts.output_dir = tmp / "prep";
+    opts.dataset_id = "dense";
+    opts.dimensions = {{"x", 0, 1e9}};
+    opts.measures   = {"m0", "m1"};
+    auto rep = a3i::run_parquet_to_columns(opts);
+    ASSERT_EQ(rep.rows_written, kRows);
+
+    a3i::BinaryColumnStore disk_store(rep.manifest_path);
+    a3i::BinaryColumnStore eager_store(rep.manifest_path, /*selected=*/{},
+                                       a3i::MeasureStorage::Eager);
+
+    // Every other row across the whole file: 50% of rows, ~100% of pages ->
+    // well past the crossover, so the scan path fires. Includes a duplicate.
+    std::vector<a3i::RowId> ids;
+    for (a3i::RowId r = 0; r < kRows; r += 2) ids.push_back(r);
+    ids.push_back(ids[100]);  // duplicate, mid-span
+
+    const auto check = [&](const char* label) {
+        std::vector<std::vector<double>> all_disk, all_eager;
+        disk_store.gather_all(ids, all_disk);
+        eager_store.gather_all(ids, all_eager);
+        ASSERT_EQ(all_disk.size(), 2u) << label;
+        for (std::size_t m = 0; m < 2; ++m) {
+            for (std::size_t i = 0; i < ids.size(); ++i) {
+                ASSERT_DOUBLE_EQ(all_disk[m][i], all_eager[m][i])
+                    << label << " m=" << m << " i=" << i << " row=" << ids[i];
+            }
+        }
+    };
+
+    check("sorted");                       // ascending -> no permutation
+    std::mt19937_64 rng(7);
+    std::shuffle(ids.begin(), ids.end(), rng);
+    check("shuffled");                     // forces the order[] permutation path
+}
+
 // --- Validation filters DROP rows; --max-rows caps after filtering ------
 
 TEST(BinaryColumnStore, ValidationFiltersDropRows) {

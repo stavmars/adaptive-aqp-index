@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <numeric>
@@ -61,20 +63,64 @@ void pread_exact(int fd, void* buf, std::size_t len, std::uint64_t off) {
 // Tuning for the batched on-disk gather. Ranges are page-aligned because the
 // device and page cache move whole pages anyway; only overlapping or exactly
 // adjacent page ranges are merged — reading through a gap of unneeded pages
-// trades bytes for fewer requests, and measured on the target device the
-// random-read rate does not drop with request count (it rises with density),
-// so over-reading only wastes bandwidth. A single range is capped so
-// coalescing cannot grow one read without bound. Ranges that fit a ring slot
-// are issued asynchronously with up to kRingDepth requests in flight —
-// scattered reads are latency-bound, so the device must see a deep queue to
-// deliver its random-read throughput. Ranges larger than a slot are dense
-// contiguous runs where the kernel's readahead already delivers full
-// bandwidth to a plain positional read.
+// trades bytes for fewer requests, which does not pay off when the device's
+// random-read throughput does not fall with request count, so over-reading
+// only wastes bandwidth. A single range is capped so coalescing cannot grow
+// one read without bound. Ranges that fit a ring slot are issued
+// asynchronously with up to kRingDepth requests in flight — scattered reads
+// are latency-bound, so the device must see a deep queue to reach its
+// random-read throughput. Ranges larger than a slot are dense contiguous runs
+// where the kernel's readahead already delivers full bandwidth to a plain
+// positional read.
 constexpr std::uint64_t kPageBytes     = 4096;
 constexpr std::uint64_t kMergeGapBytes = 0;
 constexpr std::uint64_t kMaxRangeBytes = 8u << 20;
 constexpr unsigned      kRingDepth     = 256;
 constexpr std::size_t   kSlotBytes     = 64 * 1024;
+
+// Access-path crossover: a scattered gather reads only the pages holding
+// wanted rows but at the device's random-read rate, while a sequential scan of
+// the rows' [min,max] span reads every page in the span at the (much higher)
+// streaming rate and filters in memory. Reading frac of a span's rows touches,
+// for rows scattered uniformly over the span's pages,
+//   touched_fraction = 1 - (1 - frac)^rows_per_page  ~=  1 - e^(-frac*512)
+// distinct pages. The gather is cheaper than the scan while
+//   touched_fraction < random_bw / sequential_bw.
+// That ratio is a per-device property (saturated random throughput over
+// streaming throughput), not a code constant, so it is required from the
+// environment variable A3I_RANDOM_SEQ_BW_RATIO -- there is deliberately no
+// built-in default, because a wrong device assumption silently picks the wrong
+// access path. It is read once and applied as a single value, not a per-call
+// probe, so the decision adds no I/O and never perturbs the page cache of the
+// columns about to be read. A lower ratio (a device whose random reads are
+// relatively slower) lowers the scan crossover and sends more reads to the
+// sequential-scan path; 1.0 disables the scan path entirely (always gather).
+constexpr std::size_t kRowsPerPage   = kPageBytes / sizeof(double);  // 512
+constexpr std::size_t kScanBlockRows = std::size_t{1} << 20;  // 8 MiB/measure
+
+// The crossover ratio, resolved once from A3I_RANDOM_SEQ_BW_RATIO. Throws if it
+// is unset or not in (0, 1] -- callers reach this only on an OnDisk store, so
+// the cost-model input must be supplied explicitly for the target device.
+double random_vs_sequential_bw() {
+    static const double ratio = [] {
+        const char* env = std::getenv("A3I_RANDOM_SEQ_BW_RATIO");
+        if (env == nullptr || *env == '\0') {
+            throw std::runtime_error(
+                "A3I_RANDOM_SEQ_BW_RATIO is not set: the on-disk access-path "
+                "cost model needs the device's random/sequential bandwidth "
+                "ratio, a number in (0,1]");
+        }
+        char* end = nullptr;
+        const double v = std::strtod(env, &end);
+        if (end == env || v <= 0.0 || v > 1.0) {
+            throw std::runtime_error(
+                "A3I_RANDOM_SEQ_BW_RATIO must be a number in (0,1]; got: " +
+                std::string(env));
+        }
+        return v;
+    }();
+    return ratio;
+}
 
 // One coalesced read: file bytes [file_off, file_off+len) cover the sorted
 // gather positions [first, first+count).
@@ -293,6 +339,28 @@ void BinaryColumnStore::gather_batch(std::span<const MeasureId> ms,
     }
     const auto pos_of = [&](std::size_t j) { return sorted ? j : order[j]; };
 
+    // Access-path choice: compare the scattered gather against a sequential
+    // scan of the rows' [min,max] span (see kRandomVsSequentialBw). The wanted
+    // rows occupy `span_pages`; reading n of them scatters over an expected
+    // `touched = span_pages * (1 - (1 - n/span_rows)^rows_per_page)` pages. The
+    // gather wins while touched/span_pages < random/sequential bandwidth; once
+    // the rows are dense enough to touch a larger fraction of the span, a
+    // straight scan of the span moves the same pages far faster. Both costs
+    // scale with the column count k, so it cancels and the decision is per
+    // span, not per measure.
+    const RowId lo = row_ids[pos_of(0)];
+    const RowId hi = row_ids[pos_of(n - 1)];
+    const std::uint64_t span_rows  = static_cast<std::uint64_t>(hi - lo) + 1;
+    const std::uint64_t span_pages =
+        (span_rows + kRowsPerPage - 1) / kRowsPerPage;
+    const double frac = static_cast<double>(n) / static_cast<double>(span_rows);
+    const double touched_fraction =
+        -std::expm1(-frac * static_cast<double>(kRowsPerPage));  // 1 - e^(-frac*512)
+    if (span_pages > 0 && touched_fraction >= random_vs_sequential_bw()) {
+        scan_span(ms, row_ids, outs, order, lo, span_rows);
+        return;
+    }
+
     // Coalesce the sorted byte offsets into page-aligned ranges, merging only
     // overlapping or adjacent pages (reading through a gap of unneeded pages
     // wastes bandwidth without reducing device time) and splitting when a
@@ -446,6 +514,48 @@ void BinaryColumnStore::gather_batch(std::span<const MeasureId> ms,
         handle_cqe(cqe);
         // Drain whatever else has already completed before topping up again.
         while (io_uring_peek_cqe(ring, &cqe) == 0) handle_cqe(cqe);
+    }
+}
+
+void BinaryColumnStore::scan_span(std::span<const MeasureId> ms,
+                                  std::span<const RowId> row_ids,
+                                  double* const* outs,
+                                  std::span<const std::size_t> order,
+                                  RowId lo, std::uint64_t span_rows) const {
+    const std::size_t n = row_ids.size();
+    const std::size_t k = ms.size();
+    const bool sorted = order.empty();
+    const auto pos_of = [&](std::size_t j) { return sorted ? j : order[j]; };
+
+    // Walk the sorted ids and the streamed span block in lockstep. The ids are
+    // ascending in span order (j index), so a single forward cursor `j` over
+    // them matches each block's rows; duplicates advance the cursor without
+    // re-reading. Each measure column is read once, front-to-back over the
+    // span, in large sequential blocks the kernel readahead streams at full
+    // bandwidth.
+    std::vector<double> buf;
+    for (std::size_t c = 0; c < k; ++c) {
+        const OnDiskColumn& col = measure_files_[ms[c]];
+        std::size_t j = 0;  // cursor into the sorted ids
+        for (std::uint64_t base = 0; base < span_rows; base += kScanBlockRows) {
+            const std::uint64_t count = std::min<std::uint64_t>(kScanBlockRows, span_rows - base);
+            const RowId block_begin = static_cast<RowId>(lo + base);
+            // Advance to the first id within this block.
+            while (j < n && row_ids[pos_of(j)] < block_begin) ++j;
+            if (j >= n) break;  // no more wanted rows
+            // If the next wanted row is past this block, skip the read entirely.
+            if (row_ids[pos_of(j)] >= block_begin + count) continue;
+            if (buf.size() < count) buf.resize(count);
+            pread_exact(col.fd, buf.data(), count * sizeof(double),
+                        static_cast<std::uint64_t>(block_begin) * sizeof(double));
+            while (j < n) {
+                const std::size_t pos = pos_of(j);
+                const RowId r = row_ids[pos];
+                if (r >= block_begin + count) break;
+                outs[c][pos] = buf[r - block_begin];
+                ++j;
+            }
+        }
     }
 }
 

@@ -8,9 +8,12 @@ function(a3i_add_labeled_test name label)
     add_executable(${name} ${ARGN})
     target_link_libraries(${name} PRIVATE a3i_core GTest::gtest_main)
     target_include_directories(${name} PRIVATE ${PROJECT_SOURCE_DIR}/include)
+    # The on-disk store requires A3I_RANDOM_SEQ_BW_RATIO (no built-in default);
+    # tests exercise the OnDisk backing, so pin a representative SSD value.
     gtest_discover_tests(${name}
         TEST_PREFIX  "${name}."
         PROPERTIES LABELS "${label}"
+                   ENVIRONMENT "A3I_RANDOM_SEQ_BW_RATIO=0.39"
     )
 endfunction()
 
