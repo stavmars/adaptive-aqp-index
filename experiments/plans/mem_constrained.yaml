@@ -1,0 +1,13 @@
+# Out-of-core plan: measures stay on disk and are read by RowId under a cgroup
+# cap (16 GiB) that holds the resident index (~12 GB for most datasets) but not the measure set,
+# so every method exercises the on-disk read path. A standalone experiment plan for
+# the on-disk setting. A single mem cap likely suffices: a tighter one streams the same measures the same way (page cache
+# barely helps the scattered per-query reads). Enforced by the cgroup launcher.
+plan_id: mem_constrained
+runs: [a3i, kd, kd_agg, scan, adkd, adkd_agg, adkd_sampling]
+workloads:
+  - taxi_clustered
+  - taxi_random
+  - gaia_dr3_clustered
+  - gaia_dr3_random
+mem: [16GiB]

@@ -6,7 +6,7 @@
 
 namespace a3i {
 
-constexpr std::string_view kVersion = "0.3.0";
+constexpr std::string_view kVersion = "0.4.0";
 
 inline std::string_view version() { return kVersion; }
 
