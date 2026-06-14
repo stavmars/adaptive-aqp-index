@@ -464,6 +464,38 @@ TEST(BinaryColumnStore, OnDiskDenseGatherUsesScanPathAndMatchesEager) {
     check("shuffled");                     // forces the order[] permutation path
 }
 
+// would_scan is the access-path cost model exposed for look-ahead: a dense row
+// set over its span takes the scan path, a sparse one gathers, and an eager
+// store never scans. (A3I_RANDOM_SEQ_BW_RATIO is set for the test environment.)
+TEST(BinaryColumnStore, WouldScanMatchesCostModel) {
+    TempDir tmp;
+    const auto csv = tmp / "ws.csv";
+    {
+        std::string s = "x,m0\n";
+        for (int i = 0; i < 100; ++i) s += std::to_string(i) + "," + std::to_string(i) + "\n";
+        write_text(csv, s);
+    }
+    a3i::ConvertOptions opts;
+    opts.input_parquet = to_parquet(csv, /*has_header=*/true);
+    opts.output_dir = tmp / "prep";
+    opts.dataset_id = "ws";
+    opts.dimensions = {{"x", 0, 1e9}};
+    opts.measures   = {"m0"};
+    auto rep = a3i::run_parquet_to_columns(opts);
+
+    a3i::BinaryColumnStore disk(rep.manifest_path);
+    a3i::BinaryColumnStore eager(rep.manifest_path, /*selected=*/{},
+                                 a3i::MeasureStorage::Eager);
+
+    // would_scan is pure arithmetic over (lo, hi, n), independent of the store's
+    // own row count, so a wide span exercises the sparse regime cleanly.
+    constexpr a3i::RowId kHi = 10'000'000 - 1;  // 10M-row span
+    EXPECT_TRUE(disk.would_scan(0, kHi, 20'000));   // dense over span -> scan
+    EXPECT_FALSE(disk.would_scan(0, kHi, 100));     // sparse over span -> gather
+    EXPECT_FALSE(disk.would_scan(0, kHi, 0));        // nothing to read
+    EXPECT_FALSE(eager.would_scan(0, kHi, 20'000)); // eager has no scan path
+}
+
 // --- Validation filters DROP rows; --max-rows caps after filtering ------
 
 TEST(BinaryColumnStore, ValidationFiltersDropRows) {

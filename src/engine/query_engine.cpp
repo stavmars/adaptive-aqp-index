@@ -160,50 +160,94 @@ std::vector<StratumAlloc> QueryEngine::assemble_allocation() const {
     return out;
 }
 
-void QueryEngine::read_round(const std::vector<std::uint64_t>& targets,
+bool QueryEngine::read_round(const std::vector<std::uint64_t>& targets,
                              std::uint64_t ordinal, std::uint64_t round,
                              QueryMetrics& metrics) {
-    std::vector<StratumCursor> cursors;
-    cursors.reserve(residual_.size());
-    std::vector<std::uint64_t> new_rows(residual_.size(), 0);
-
-    for (std::size_t h = 0; h < residual_.size(); ++h) {
-        const std::uint64_t sampled = sampled_count(residual_[h]);
-        const std::uint64_t target = h < targets.size() ? targets[h] : 0;
-        if (target <= sampled) continue;
-        const std::uint64_t delta = target - sampled;
-        ResidualPartition& p = residual_[h];
-        Rng rng(mix_seed(ordinal, round, h, target));
-        StratumCursor c;
-        if (p.reusable) {
-            c = make_reusable_sampled_cursor(table_, p.begin, p.size, *p.tracker,
-                                             delta, rng,
-                                             static_cast<StratumTag>(h),
-                                             config_.sort_gather_by_row_id);
-        } else {
-            c = make_query_local_sampled_cursor(table_, p.begin, *p.qualifying,
-                                                *p.tracker, delta, rng,
-                                                static_cast<StratumTag>(h),
-                                                config_.sort_gather_by_row_id);
+    // Draw the merged, ascending id/tag stream for a set of per-stratum targets
+    // (no I/O), plus the per-stratum new-row counts. Drawing marks the per-
+    // stratum sample trackers, so it must run exactly once per round -- the
+    // scan-to-exactify decision below is therefore made before drawing.
+    struct Batch {
+        std::vector<RowId>         ids;
+        std::vector<StratumTag>    tags;
+        std::vector<std::uint64_t> new_rows;
+    };
+    const auto build = [&](const std::vector<std::uint64_t>& tg) -> Batch {
+        Batch b;
+        b.new_rows.assign(residual_.size(), 0);
+        std::vector<StratumCursor> cursors;
+        cursors.reserve(residual_.size());
+        for (std::size_t h = 0; h < residual_.size(); ++h) {
+            const std::uint64_t sampled = sampled_count(residual_[h]);
+            const std::uint64_t target = h < tg.size() ? tg[h] : 0;
+            if (target <= sampled) continue;
+            const std::uint64_t delta = target - sampled;
+            ResidualPartition& p = residual_[h];
+            Rng rng(mix_seed(ordinal, round, h, target));
+            StratumCursor c;
+            if (p.reusable) {
+                c = make_reusable_sampled_cursor(table_, p.begin, p.size, *p.tracker,
+                                                 delta, rng,
+                                                 static_cast<StratumTag>(h),
+                                                 config_.sort_gather_by_row_id);
+            } else {
+                c = make_query_local_sampled_cursor(table_, p.begin, *p.qualifying,
+                                                    *p.tracker, delta, rng,
+                                                    static_cast<StratumTag>(h),
+                                                    config_.sort_gather_by_row_id);
+            }
+            b.new_rows[h] = c.owned.size();
+            cursors.push_back(std::move(c));
         }
-        new_rows[h] = c.owned.size();
-        cursors.push_back(std::move(c));
-    }
-    if (cursors.empty()) return;
-
-    std::vector<RowId>      ids;
-    std::vector<StratumTag> tags;
-    {
+        if (cursors.empty()) return b;
         KWayMerge merge(cursors);
         constexpr std::size_t kChunk = 4096;
         std::vector<RowId>      id_chunk(kChunk);
         std::vector<StratumTag> tag_chunk(kChunk);
         std::size_t got = 0;
         while ((got = merge.next_chunk(id_chunk, tag_chunk)) > 0) {
-            ids.insert(ids.end(), id_chunk.begin(), id_chunk.begin() + got);
-            tags.insert(tags.end(), tag_chunk.begin(), tag_chunk.begin() + got);
+            b.ids.insert(b.ids.end(), id_chunk.begin(), id_chunk.begin() + got);
+            b.tags.insert(b.tags.end(), tag_chunk.begin(), tag_chunk.begin() + got);
         }
+        return b;
+    };
+
+    // Scan-to-exactify decision, made BEFORE drawing (drawing mutates the
+    // trackers, so it runs once). Count the new rows this round would read; if
+    // that many rows scattered over the table's row span would take the storage
+    // scan path, the read sweeps the whole span regardless -- so read the
+    // entire residual in that one pass instead of sampling now and re-scanning
+    // the span over later rounds. The span is the whole table because the
+    // prepared layout is shuffled, so any sample spreads across ~the whole file
+    // (conservative for a clustered layout: a wider span only suppresses
+    // escalation). Skipped when the round already targets the full residual
+    // (the terminal exactify); a no-op in memory (would_scan is false there).
+    std::uint64_t planned_new = 0;
+    bool already_full = true;
+    for (std::size_t h = 0; h < residual_.size(); ++h) {
+        const std::uint64_t t = h < targets.size() ? targets[h] : 0;
+        const std::uint64_t sampled = sampled_count(residual_[h]);
+        if (t > sampled) planned_new += t - sampled;
+        if (t < residual_[h].N) already_full = false;
     }
+    const std::vector<std::uint64_t>* eff = &targets;
+    std::vector<std::uint64_t> full;
+    bool escalated = false;
+    if (!already_full && planned_new > 0 && table_.size() > 0 &&
+        store_.would_scan(0, static_cast<RowId>(table_.size() - 1), planned_new)) {
+        full.assign(residual_.size(), 0);
+        for (std::size_t h = 0; h < residual_.size(); ++h) full[h] = residual_[h].N;
+        eff = &full;
+        escalated = true;
+    }
+
+    // Draw exactly once, for the effective targets (the planned sample, or the
+    // full residual if the round escalated).
+    const Batch b = build(*eff);
+    if (b.ids.empty()) return false;
+    const std::vector<RowId>&         ids = b.ids;
+    const std::vector<StratumTag>&    tags = b.tags;
+    const std::vector<std::uint64_t>& new_rows = b.new_rows;
 
     std::vector<std::vector<MomentStats>> round_moments(
         residual_.size(), std::vector<MomentStats>(measure_count_));
@@ -246,8 +290,10 @@ void QueryEngine::read_round(const std::vector<std::uint64_t>& targets,
         ResidualPartition& p = residual_[h];
         // Rows that complete a stratum are full-read work, rows that keep it
         // partially sampled are sampling work -- regardless of which round
-        // shape requested them.
-        if (h < targets.size() && targets[h] >= p.N) {
+        // shape requested them (`eff` is the effective target set, which the
+        // scan-to-exactify escalation may have raised to the full residual).
+        const std::uint64_t eff_target = h < eff->size() ? (*eff)[h] : 0;
+        if (eff_target >= p.N) {
             metrics.exactified_rows += new_rows[h];
         } else {
             metrics.sampled_rows += new_rows[h];
@@ -267,6 +313,7 @@ void QueryEngine::read_round(const std::vector<std::uint64_t>& targets,
             }
         }
     }
+    return escalated;
 }
 
 void QueryEngine::exactify_round(std::uint64_t ordinal, std::uint64_t round,
@@ -353,7 +400,10 @@ QueryResult QueryEngine::execute(const RangeQuery& query,
         const AllocationPlan pilot =
             allocator_.plan_pilot(assemble_allocation());
         if (!pilot.no_target_increase) {
-            read_round(pilot.target, query_ordinal, round, m);
+            if (read_round(pilot.target, query_ordinal, round, m)) {
+                exactified = true;
+                cause = "scan_cheaper_than_gather";
+            }
             estimates = estimator_.estimate(d.exact_bucket, d.total_count,
                                             assemble_estimator_input(),
                                             global_mean_abs_, conf);
@@ -389,7 +439,10 @@ QueryResult QueryEngine::execute(const RangeQuery& query,
         }
 
         ++round;
-        read_round(plan.target, query_ordinal, round, m);
+        if (read_round(plan.target, query_ordinal, round, m)) {
+            exactified = true;
+            cause = "scan_cheaper_than_gather";
+        }
         estimates = estimator_.estimate(d.exact_bucket, d.total_count,
                                         assemble_estimator_input(),
                                         global_mean_abs_, conf);

@@ -96,13 +96,21 @@ struct QueryMetrics {
     std::string   status;
     /// Internal free-form note; NOT emitted to the results CSV.
     std::string   stop_reason;
-    // Why the whole remaining residual was read in full, if it was: "none"
-    // when the terminal full read never ran (individual strata may still have
-    // been read whole inside planned rounds -- that work shows up in
-    // exactified_rows, not here); or "gave_up", when the round budget was
-    // spent or a plan could raise no target while an aggregate still failed.
-    // Recorded after the fact for analysis; it does not steer the control
-    // flow.
+    // Why the whole remaining residual was read in full, if it was:
+    //   "none"   - the terminal full read never ran (individual strata may
+    //              still have been read whole inside planned rounds -- that
+    //              work shows up in exactified_rows, not here);
+    //   "scan_cheaper_than_gather" - a round's scattered read would have taken
+    //              the storage scan path (it would sweep the rows' whole span
+    //              anyway), so the engine read the entire residual in that one
+    //              sequential pass instead of sampling and re-scanning the span
+    //              over later rounds. On-disk only; the exact answer falls out
+    //              of the same scan.
+    //   "gave_up" - the round budget was spent, or a plan could raise no target
+    //              while an aggregate still failed, so the residual was read in
+    //              full as a fallback.
+    // Recorded after the fact for analysis; "gave_up" does not steer control
+    // flow, "scan_cheaper_than_gather" reflects the per-round escalation.
     std::string   exactify_cause = "none";
 
     /// Wall-clock of `execute()` for this query; filled by the runner.

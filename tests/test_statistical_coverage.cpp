@@ -173,6 +173,14 @@ double coverage_floor(int n, double z = 3.0) {
 // independent and no cracking carries over.
 CoverageStats sweep(const Dataset& d, double rel, int seeds,
                     AggregateOp op = AggregateOp::Sum) {
+    // Coverage is a property of the sampling math, independent of storage. Run
+    // it on an in-memory store: these fixtures are tiny / contiguous, so on disk
+    // the access-path cost model would (correctly) read them whole rather than
+    // sample, leaving no sampled intervals to score. Eager has no scan path, so
+    // the loop genuinely samples here; on-disk scan-to-exactify is covered by
+    // the dedicated on-disk tests.
+    BinaryColumnStore eager(d.schema.binary_manifest_path, /*selected=*/{},
+                            MeasureStorage::Eager);
     const double            n = d.xhi;
     const std::vector<std::pair<double, double>> rects = {
         {0.0, n},
@@ -196,7 +204,7 @@ CoverageStats sweep(const Dataset& d, double rel, int seeds,
             path.prepare(table);
             EngineConfig cfg;
             cfg.accuracy_mode = EngineConfig::AccuracyMode::PerQuery;
-            QueryEngine engine(*d.store, table, path, cfg);
+            QueryEngine engine(eager, table, path, cfg);
 
             const QueryResult got =
                 engine.execute(d.query(xlo, xhi_q, rel), static_cast<std::uint64_t>(s));

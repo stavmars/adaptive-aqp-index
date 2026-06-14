@@ -86,7 +86,7 @@ One row per query, 28 columns. The authoritative header is `kHeader` in
 | 7 | `aggregates` | JSON array, one object per (aggregate, measure); see below. |
 | 8 | `target_satisfied` | `true` iff every aggregate met its accuracy target. |
 | 9 | `status` | `exact`, `converged`, `exactified`, or `exhausted_unconverged`. |
-| 10 | `exactify_cause` | `none`, `cheaper_to_exactify`, or `gave_up` — why the residual was read in full. |
+| 10 | `exactify_cause` | `none`, `scan_cheaper_than_gather` (a round's read would scan the rows' whole span anyway, so the full residual was read in that one sequential pass — on-disk only), or `gave_up` (round budget spent) — why the residual was read in full. |
 | 11 | `pre_exactification_error_bound` | Worst relative half-width just before exactification (0 if none). |
 | 12 | `sampling_seed` | Seed material for the run (the run id). |
 | 13 | `latency_ms` | Wall-clock of the query (excludes the one-time build; see `init_ms` in runmeta). |

@@ -315,6 +315,24 @@ void BinaryColumnStore::gather_all(std::span<const RowId> row_ids,
     gather_batch(ms, row_ids, ptrs.data(), already_sorted, path_stats);
 }
 
+bool BinaryColumnStore::would_scan(RowId lo, RowId hi, std::size_t n) const {
+    // Only the on-disk backing has a scan-vs-gather choice; an eager store
+    // indexes a resident array, so there is no scan path.
+    if (storage_mode_ != MeasureStorage::OnDisk || n == 0) return false;
+    // Compare the scattered gather against a sequential scan of the rows'
+    // [lo, hi] span. The n wanted rows scatter over the span's pages, touching
+    // an expected fraction  1 - (1 - n/span_rows)^rows_per_page  ~=
+    // 1 - e^(-frac*rows_per_page)  of them. Gathering reads exactly those pages
+    // at the device's random-read rate; scanning reads every page in the span
+    // at the streaming rate and filters in memory. The scan wins once the
+    // touched fraction reaches the device's random/sequential bandwidth ratio.
+    const std::uint64_t span_rows = static_cast<std::uint64_t>(hi - lo) + 1;
+    const double frac = static_cast<double>(n) / static_cast<double>(span_rows);
+    const double touched_fraction =
+        -std::expm1(-frac * static_cast<double>(kRowsPerPage));  // 1 - e^(-frac*512)
+    return touched_fraction >= random_vs_sequential_bw();
+}
+
 void BinaryColumnStore::gather_batch(std::span<const MeasureId> ms,
                                      std::span<const RowId> row_ids,
                                      double* const* outs,
@@ -341,24 +359,14 @@ void BinaryColumnStore::gather_batch(std::span<const MeasureId> ms,
     }
     const auto pos_of = [&](std::size_t j) { return sorted ? j : order[j]; };
 
-    // Access-path choice: compare the scattered gather against a sequential
-    // scan of the rows' [min,max] span (see kRandomVsSequentialBw). The wanted
-    // rows occupy `span_pages`; reading n of them scatters over an expected
-    // `touched = span_pages * (1 - (1 - n/span_rows)^rows_per_page)` pages. The
-    // gather wins while touched/span_pages < random/sequential bandwidth; once
-    // the rows are dense enough to touch a larger fraction of the span, a
-    // straight scan of the span moves the same pages far faster. Both costs
-    // scale with the column count k, so it cancels and the decision is per
-    // span, not per measure.
+    // Access-path choice (see would_scan): when the wanted rows are dense
+    // enough over their [min,max] span that a sequential scan of the span beats
+    // a scattered gather, scan; otherwise gather. The decision is per span and
+    // independent of the column count.
     const RowId lo = row_ids[pos_of(0)];
     const RowId hi = row_ids[pos_of(n - 1)];
-    const std::uint64_t span_rows  = static_cast<std::uint64_t>(hi - lo) + 1;
-    const std::uint64_t span_pages =
-        (span_rows + kRowsPerPage - 1) / kRowsPerPage;
-    const double frac = static_cast<double>(n) / static_cast<double>(span_rows);
-    const double touched_fraction =
-        -std::expm1(-frac * static_cast<double>(kRowsPerPage));  // 1 - e^(-frac*512)
-    if (span_pages > 0 && touched_fraction >= random_vs_sequential_bw()) {
+    const std::uint64_t span_rows = static_cast<std::uint64_t>(hi - lo) + 1;
+    if (would_scan(lo, hi, n)) {
         const std::uint64_t bytes = scan_span(ms, row_ids, outs, order, lo, span_rows);
         if (path_stats != nullptr) {
             path_stats->scan_rows  += n;

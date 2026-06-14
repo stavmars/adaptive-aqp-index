@@ -110,7 +110,14 @@ private:
     // partition's running summary (persistent for reusable strata, query-local
     // otherwise). Rows read toward a full-population target are charged to
     // the exactified-rows counter, all others to the sampled-rows counter.
-    void read_round(const std::vector<std::uint64_t>& targets,
+    //
+    // Scan-to-exactify: if the planned batch's scattered read would instead
+    // take the storage scan path (it would sweep the whole [min,max] span
+    // anyway), the round escalates to reading the entire residual in that one
+    // pass and returns true; the caller then treats the query as exactified.
+    // Returns false for an ordinary sampling round. A round already targeting
+    // the full residual (the terminal exactify) never escalates.
+    bool read_round(const std::vector<std::uint64_t>& targets,
                     std::uint64_t ordinal, std::uint64_t round,
                     QueryMetrics& metrics);
     // Read every residual stratum to completion (target == population), so the

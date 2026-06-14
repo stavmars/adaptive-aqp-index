@@ -131,6 +131,16 @@ public:
                     bool already_sorted = false,
                     GatherPathStats* path_stats = nullptr) const;
 
+    /// The access-path cost-model decision, exposed so a caller can look one
+    /// step ahead: would gathering `n` distinct row ids whose span is
+    /// `[lo, hi]` instead take the sequential-scan path (because the rows are
+    /// dense enough over their span that streaming the span beats scattered
+    /// random reads)? Pure — reads the device bandwidth ratio, performs no
+    /// I/O — and the single source of truth for the choice `gather` makes
+    /// internally. Always false for an eager (in-memory) store, which has no
+    /// scan path. `lo <= hi`.
+    bool would_scan(RowId lo, RowId hi, std::size_t n) const;
+
     /// Read `count` consecutive rows of measure `m` starting at `begin`.
     /// Returns a view of the values: a zero-copy subspan of the resident
     /// column under eager backing, or `scratch` filled by sequential

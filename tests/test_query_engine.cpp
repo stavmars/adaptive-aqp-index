@@ -312,7 +312,14 @@ TEST(QueryEngine, ApproximateLoopCertifiesIntervals) {
     path.prepare(table);
     EngineConfig cfg;
     cfg.accuracy_mode = EngineConfig::AccuracyMode::PerQuery;
-    QueryEngine engine(*f.store, table, path, cfg);
+    // Exercise the sampling/interval math on an in-memory store: the tiny test
+    // table is under one page, so on disk the access-path cost model would
+    // (correctly) read it whole rather than sample. Eager has no scan path, so
+    // the adaptive loop genuinely samples here. (Scan-to-exactify escalation is
+    // covered separately by the on-disk tests.)
+    BinaryColumnStore eager(f.schema.binary_manifest_path, /*selected=*/{},
+                            MeasureStorage::Eager);
+    QueryEngine engine(eager, table, path, cfg);
 
     const double rel = 0.25;
     const RangeQuery q = query(0.0, 20.0, 0.0, 20.0, rel);
@@ -389,4 +396,34 @@ TEST(QueryEngine, TightTargetReadsEverything) {
     EXPECT_GT(got.metrics.exactified_rows, 0u);
     const std::string& s = got.metrics.status;
     EXPECT_TRUE(s == "converged" || s == "exactified") << s;
+}
+
+// Scan-to-exactify: on the on-disk store, a round whose scattered read would
+// take the sequential-scan path is escalated to reading the whole residual in
+// that one pass, instead of sampling and re-scanning the span across rounds.
+// One big stratum (threshold 512) makes the pilot sample rather than take 400
+// tiny leaves whole, and the fixture table is under one page, so any scattered
+// read scans -> the escalation fires.
+TEST(QueryEngine, OnDiskScanWouldHappenEscalatesToExactify) {
+    Fixture f;
+    IndexTable table = f.make_table();
+    AdaptiveKdAccessPath path(f.substrate(512));
+    path.prepare(table);
+    EngineConfig cfg;
+    cfg.accuracy_mode = EngineConfig::AccuracyMode::PerQuery;
+    QueryEngine engine(*f.store, table, path, cfg);  // OnDisk backing
+
+    const RangeQuery q = query(0.0, 20.0, 0.0, 20.0, /*rel=*/0.1);
+    const QueryResult got = engine.execute(q, 5);
+    const QueryResult oracle = exact_scan(*f.store, f.schema, q);
+
+    expect_matches_oracle(got, oracle);                // exact answer
+    EXPECT_EQ(got.metrics.exactify_cause, "scan_cheaper_than_gather");
+    EXPECT_EQ(got.metrics.status, "exactified");
+    EXPECT_EQ(got.metrics.sampled_rows, 0u);
+    EXPECT_GT(got.metrics.exactified_rows, 0u);
+    EXPECT_GT(got.metrics.scan_path_rows, 0u);          // residual read via scan
+    EXPECT_EQ(got.metrics.gather_path_rows, 0u);
+    // The fix: a single reading round, not repeated full-span scans.
+    EXPECT_LE(got.metrics.round_paths.size(), 1u);
 }

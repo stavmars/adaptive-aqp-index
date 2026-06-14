@@ -325,7 +325,15 @@ TEST_F(WorkloadSoundness, ApproximateIntervalsStaySoundAndCalibrated) {
     EngineConfig cfg;
     cfg.accuracy_mode     = EngineConfig::AccuracyMode::PerQuery;
     cfg.persist_summaries = false;
-    QueryEngine engine(*wl_->store, table, path, cfg);
+    // Interval calibration is a property of the sampling math, independent of
+    // storage. Run it on an in-memory store: the fixture's rows are contiguous,
+    // so a range query's rows are dense over a narrow span and the on-disk cost
+    // model would (correctly) read them whole rather than sample. Eager has no
+    // scan path, so the loop genuinely samples here; on-disk scan-to-exactify
+    // is covered by the dedicated on-disk tests.
+    BinaryColumnStore eager(wl_->schema.binary_manifest_path, /*selected=*/{},
+                            MeasureStorage::Eager);
+    QueryEngine engine(eager, table, path, cfg);
 
     const double rel     = 0.10;
     int          sampled = 0;
