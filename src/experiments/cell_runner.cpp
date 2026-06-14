@@ -38,7 +38,8 @@ constexpr const char* kHeader =
     "sampling_seed,latency_ms,measure_reads,sampled_rows,"
     "exactified_rows,frontier_partitions,partitions_refined,exact_contributors,"
     "reusable_sampled_strata,reusable_absent_strata,query_local_strata,"
-    "adaptive_rounds,scan_path_rows,gather_path_rows";
+    "adaptive_rounds,scan_path_rows,gather_path_rows,"
+    "scan_bytes_read,gather_bytes_read,round_paths";
 
 // Locale-independent, byte-stable, round-tripping double formatting.
 std::string fmt(double v) {
@@ -183,6 +184,23 @@ json rect_json(const HyperRect& rect) {
     return json{{"lower", std::move(lower)}, {"upper", std::move(upper)}};
 }
 
+// The query's per-round on-disk access paths as a JSON array, one object per
+// round that read from disk: r=round index, sr/gr=wanted rows served by
+// scan/gather, sb/gb=device bytes read by each. Empty for an in-memory cell.
+json round_paths_json(const std::vector<RoundPath>& rounds) {
+    json arr = json::array();
+    for (const RoundPath& rp : rounds) {
+        arr.push_back(json{
+            {"r", rp.round},
+            {"sr", rp.scan_rows},
+            {"gr", rp.gather_rows},
+            {"sb", rp.scan_bytes},
+            {"gb", rp.gather_bytes},
+        });
+    }
+    return arr;
+}
+
 // The query's aggregate answers as a JSON array, one object per
 // (aggregate, measure); a non-finite estimate or interval bound serialises as
 // null (the JSON spelling of NaN).
@@ -223,7 +241,9 @@ void write_row(std::ofstream& out, std::uint64_t ordinal, const std::string& met
         << m.partitions_refined << ',' << m.exact_contributors << ','
         << m.reusable_sampled_strata << ',' << m.reusable_absent_strata << ','
         << m.query_local_strata << ',' << m.adaptive_rounds << ','
-        << m.scan_path_rows << ',' << m.gather_path_rows << '\n';
+        << m.scan_path_rows << ',' << m.gather_path_rows << ','
+        << m.scan_bytes_read << ',' << m.gather_bytes_read << ','
+        << csv_quote(round_paths_json(m.round_paths).dump()) << '\n';
 }
 
 // Distinct yet reproducible sampling seed material per (run, query). For run 0

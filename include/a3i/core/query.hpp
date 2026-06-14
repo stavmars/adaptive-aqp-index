@@ -63,6 +63,20 @@ struct AggregateEstimate {
     bool        exact               = false;
 };
 
+/// One sampling/exactify round's on-disk access-path record. A round issues a
+/// single batched read whose path is chosen once for the whole batch, so each
+/// round is entirely scan or entirely gather; both row counts and both byte
+/// counts are kept so a round is self-describing regardless of the path taken.
+/// The sequence of these per query reveals whether a query scanned in more
+/// than one round (each scan re-reads the span). Empty for an in-memory store.
+struct RoundPath {
+    std::uint64_t round        = 0;  ///< 1-based round index within the query.
+    std::uint64_t scan_rows    = 0;  ///< Wanted rows served by scan this round.
+    std::uint64_t gather_rows  = 0;  ///< Wanted rows served by gather this round.
+    std::uint64_t scan_bytes   = 0;  ///< Device bytes read by scan this round.
+    std::uint64_t gather_bytes = 0;  ///< Device bytes read by gather this round.
+};
+
 /// Per-query bookkeeping: timings, work counters, and the outcome
 /// taxonomy. Most fields are filled by the query engine; the exact-scan
 /// oracle fills only what a full scan can report. Every field below is also
@@ -108,16 +122,30 @@ struct QueryMetrics {
     std::uint64_t exactified_rows  = 0;
 
     // --- Access-path split (on-disk only) ------------------------------------
-    // How the rows read above were fetched from disk, chosen per batch by the
+    // How the WANTED rows were fetched from disk, chosen per batch by the
     // store's cost model: a scattered gather of just the wanted pages, or a
     // sequential scan of their span when the rows are dense enough that
     // streaming beats scattering. Counted as distinct rows (a batch picks one
-    // path for all measures), so scan_path_rows + gather_path_rows tracks the
-    // rows actually read from disk, independent of measure_count. Both stay 0
-    // for an in-memory (eager) store, which has no I/O path. Telemetry for the
-    // on-disk experiment; does not affect any answer.
+    // path for all measures), so scan_path_rows + gather_path_rows == the rows
+    // the query needed, independent of measure_count. These count rows WE
+    // WANTED, not bytes moved -- see the *_bytes_read fields for actual I/O.
+    // Both stay 0 for an in-memory (eager) store. Telemetry only.
     std::uint64_t scan_path_rows   = 0;
     std::uint64_t gather_path_rows = 0;
+
+    // Bytes actually moved from the device per path, across all measure
+    // columns. These differ sharply from the wanted-row counts: a scan reads
+    // its whole [min,max] row span (skipping only fully-empty blocks), so on
+    // scattered data a scan round can read far more than it keeps; a gather
+    // reads whole pages, so it carries page read-amplification too. This is the
+    // real on-disk cost. 0 for an in-memory store.
+    std::uint64_t scan_bytes_read   = 0;
+    std::uint64_t gather_bytes_read = 0;
+
+    // Per-round access-path records, one per round that actually read (in
+    // order). Lets analysis see how many rounds scanned -- a query that scans
+    // in several rounds re-reads its span each time. Emitted as one JSON column.
+    std::vector<RoundPath> round_paths;
 
     // --- Decomposition frontier (per-partition counts) -----------------------
     // The descent stops at a frontier of partitions and emits each as one

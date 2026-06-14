@@ -68,9 +68,10 @@ override the `.env`/defaults when given.
      ```
    - Produces `validation_summary.csv` and `validation_details.csv` per (dataset, workload).
 
+
 ## Result Schema
 
-One row per query, 23 columns. The authoritative header is `kHeader` in
+One row per query, 28 columns. The authoritative header is `kHeader` in
 `src/experiments/cell_runner.cpp`; the field semantics are documented on
 `QueryMetrics` in `include/a3i/core/query.hpp`. Columns in order:
 
@@ -99,6 +100,11 @@ One row per query, 23 columns. The authoritative header is `kHeader` in
 | 21 | `reusable_absent_strata` | Wholly-inside partitions nothing is known about yet (just created, or never sampled); sampled from scratch. No reuse. Over a session a partition migrates absent → sampled → exact, which is why later queries get cheaper. |
 | 22 | `query_local_strata` | Boundary partitions the query only partially covers (not worth cracking further). Only the in-rectangle subset is used, and since that selection is specific to this rectangle, its samples are discarded afterward and cannot help a future query. Reuse does not apply here. |
 | 23 | `adaptive_rounds` | Number of sampling/exactify rounds the engine loop ran. |
+| 24 | `scan_path_rows` | On-disk only: distinct wanted rows the cost model served via the **sequential-scan** path (vs scattered gather). A decision count, not bytes. `0` for in-memory (eager) cells. |
+| 25 | `gather_path_rows` | On-disk only: distinct wanted rows served via the **scattered-gather** path. `0` in-memory. |
+| 26 | `scan_bytes_read` | On-disk only: device bytes the scan path actually moved across all measures. Far exceeds the wanted rows — a scan reads its whole `[min,max]` row span — so this, not column 24, is the real scan I/O cost. `0` in-memory. |
+| 27 | `gather_bytes_read` | On-disk only: device bytes the gather path actually moved (whole pages, so it carries page read-amplification). `0` in-memory. |
+| 28 | `round_paths` | On-disk only: JSON array, one object per round that read from disk — `{ "r": round, "sr": scan_rows, "gr": gather_rows, "sb": scan_bytes, "gb": gather_bytes }`. Reveals how many rounds scanned vs gathered (a query that scans in several rounds re-reads its span each time). `[]` in-memory. |
 
 The four contributor counts (columns 19–22) are per **partition** (not per
 (partition, measure)) and **sum to `frontier_partitions`**. Two identities hold
@@ -106,6 +112,12 @@ for every method and are checked by `validate_results.py`:
 
 - `measure_reads == (sampled_rows + exactified_rows) × num_measures`
 - `frontier_partitions == exact_contributors + reusable_sampled_strata + reusable_absent_strata + query_local_strata`
+
+The access-path columns (24–28) are on-disk telemetry only (an eager/in-memory
+store has no I/O path, so all five are `0`/`[]`). They are not checked by the
+validator, but a third identity holds by construction:
+
+- `scan_path_rows + gather_path_rows == sampled_rows + exactified_rows` (the wanted rows, split by access path). The `*_bytes_read` columns measure actual device traffic and are unrelated to this row identity; `(scan_bytes_read + gather_bytes_read) / (measure_reads × 8)` is the read amplification (≫ 1 on scattered data).
 
 - **JSON Columns:**
   - `query_rect`: `{ "lower": [...], "upper": [...] }`

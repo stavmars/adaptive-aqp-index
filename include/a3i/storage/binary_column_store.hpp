@@ -45,13 +45,18 @@ enum class MeasureStorage {
 };
 
 /// How a single on-disk batch was served, split by access path (see the
-/// cost model in the .cpp). Reports distinct rows, not row*measure reads: a
-/// batch picks one path for all its measures, so the split is per row. Both
-/// counts stay zero for an eager (in-memory) store, which has no I/O path.
-/// Callers accumulate these across a query to report the scan/gather mix.
+/// cost model in the .cpp). A batch picks one path for all its measures.
+/// `*_rows` count the distinct WANTED rows served by each path (row, not
+/// row*measure). `*_bytes` count the actual device bytes moved by each path
+/// across all measures -- much larger than the wanted rows imply, because a
+/// scan reads its whole row span and a gather reads whole pages. All stay
+/// zero for an eager (in-memory) store. Callers accumulate these across a
+/// query to report the scan/gather mix and the real I/O it cost.
 struct GatherPathStats {
-    std::uint64_t scan_rows   = 0;  ///< Rows served by the sequential-scan path.
-    std::uint64_t gather_rows = 0;  ///< Rows served by the scattered-gather path.
+    std::uint64_t scan_rows    = 0;  ///< Wanted rows served by the scan path.
+    std::uint64_t gather_rows  = 0;  ///< Wanted rows served by the gather path.
+    std::uint64_t scan_bytes   = 0;  ///< Device bytes read by the scan path.
+    std::uint64_t gather_bytes = 0;  ///< Device bytes read by the gather path.
 };
 
 class BinaryColumnStore {
@@ -190,12 +195,13 @@ private:
     // scattered gather (see kRandomVsSequentialBw), read the span in blocks and
     // pick the wanted values. `order` is the ascending permutation of `row_ids`
     // (empty when `row_ids` is already ascending); `outs[c][orig]` receives
-    // measure `ms[c]`'s value at the original caller position.
-    void scan_span(std::span<const MeasureId> ms,
-                   std::span<const RowId> row_ids,
-                   double* const* outs,
-                   std::span<const std::size_t> order,
-                   RowId lo, std::uint64_t span_rows) const;
+    // measure `ms[c]`'s value at the original caller position. Returns the
+    // total device bytes read (summed over all measure columns).
+    std::uint64_t scan_span(std::span<const MeasureId> ms,
+                            std::span<const RowId> row_ids,
+                            double* const* outs,
+                            std::span<const std::size_t> order,
+                            RowId lo, std::uint64_t span_rows) const;
 };
 
 }  // namespace a3i

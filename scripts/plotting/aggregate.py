@@ -53,14 +53,23 @@ def cost_summary(frame: pd.DataFrame) -> pd.DataFrame:
         total_reads=("measure_reads", "sum"),
         scan_path_rows=("scan_path_rows", "sum"),
         gather_path_rows=("gather_path_rows", "sum"),
+        scan_bytes_read=("scan_bytes_read", "sum"),
+        gather_bytes_read=("gather_bytes_read", "sum"),
         init_ms=("init_ms", "median"),
     ).reset_index()
     out["cum_ms"] = out["init_ms"] + out["total_latency_ms"]
-    # Fraction of on-disk rows the cost model served by the sequential-scan
-    # path (vs scattered gather). NaN for an all-in-memory cell, which reads
-    # neither way. Telemetry for the on-disk experiment.
+    # Fraction of WANTED on-disk rows the cost model served by the sequential-
+    # scan path (vs scattered gather). NaN for an all-in-memory cell, which
+    # reads neither way. This is a decision metric, not an I/O cost.
     disk_rows = out["scan_path_rows"] + out["gather_path_rows"]
     out["scan_frac"] = (out["scan_path_rows"] / disk_rows).where(disk_rows > 0)
+    # Read amplification: device bytes actually moved over the bytes of the
+    # values the query used (measure_reads * 8). A scan reads its whole row
+    # span and a gather reads whole pages, so this is >> 1 on scattered data
+    # and exposes the true on-disk cost the wanted-row counts hide. NaN for an
+    # in-memory cell (no device bytes).
+    bytes_read = out["scan_bytes_read"] + out["gather_bytes_read"]
+    out["read_amplification"] = (bytes_read / (out["total_reads"] * 8)).where(bytes_read > 0)
     return out
 
 

@@ -34,7 +34,8 @@ EXPECTED_HEADER = (
     "sampling_seed,latency_ms,measure_reads,sampled_rows,"
     "exactified_rows,frontier_partitions,partitions_refined,exact_contributors,"
     "reusable_sampled_strata,reusable_absent_strata,query_local_strata,"
-    "adaptive_rounds,scan_path_rows,gather_path_rows"
+    "adaptive_rounds,scan_path_rows,gather_path_rows,"
+    "scan_bytes_read,gather_bytes_read,round_paths"
 ).split(",")
 
 # Runmeta stamps Layer 1 requires for a result file to be self-describing.
@@ -47,7 +48,10 @@ COST_COLS = ("latency_ms", "measure_reads", "sampled_rows", "exactified_rows",
              "frontier_partitions", "partitions_refined", "exact_contributors",
              "reusable_sampled_strata", "reusable_absent_strata",
              "query_local_strata", "adaptive_rounds",
-             "scan_path_rows", "gather_path_rows")
+             "scan_path_rows", "gather_path_rows",
+             "scan_bytes_read", "gather_bytes_read")
+# round_paths is a per-query JSON column (variable-length per-round detail), not
+# a summable cost metric, so it is loaded only on demand, not via COST_COLS.
 
 # Cell identity (one cell-run = one qresults file). `n` (query count) is part of
 # identity so runs with different `max_queries` are distinct cells, not pooled.

@@ -359,8 +359,11 @@ void BinaryColumnStore::gather_batch(std::span<const MeasureId> ms,
     const double touched_fraction =
         -std::expm1(-frac * static_cast<double>(kRowsPerPage));  // 1 - e^(-frac*512)
     if (span_pages > 0 && touched_fraction >= random_vs_sequential_bw()) {
-        if (path_stats != nullptr) path_stats->scan_rows += n;
-        scan_span(ms, row_ids, outs, order, lo, span_rows);
+        const std::uint64_t bytes = scan_span(ms, row_ids, outs, order, lo, span_rows);
+        if (path_stats != nullptr) {
+            path_stats->scan_rows  += n;
+            path_stats->scan_bytes += bytes;
+        }
         return;
     }
     if (path_stats != nullptr) path_stats->gather_rows += n;
@@ -389,6 +392,15 @@ void BinaryColumnStore::gather_batch(std::span<const MeasureId> ms,
             }
         }
         ranges.push_back({pbeg, static_cast<std::uint32_t>(pend - pbeg), j, 1});
+    }
+
+    // Every coalesced range is read in full once per measure column (whether it
+    // goes through a plain pread or the ring), so the device bytes the gather
+    // moves are fixed by the plan: total range bytes times the column count.
+    if (path_stats != nullptr) {
+        std::uint64_t range_bytes = 0;
+        for (const ReadRange& rg : ranges) range_bytes += rg.len;
+        path_stats->gather_bytes += range_bytes * static_cast<std::uint64_t>(k);
     }
 
     // Copy one finished range's values out of a staging buffer into caller
@@ -521,11 +533,11 @@ void BinaryColumnStore::gather_batch(std::span<const MeasureId> ms,
     }
 }
 
-void BinaryColumnStore::scan_span(std::span<const MeasureId> ms,
-                                  std::span<const RowId> row_ids,
-                                  double* const* outs,
-                                  std::span<const std::size_t> order,
-                                  RowId lo, std::uint64_t span_rows) const {
+std::uint64_t BinaryColumnStore::scan_span(std::span<const MeasureId> ms,
+                                           std::span<const RowId> row_ids,
+                                           double* const* outs,
+                                           std::span<const std::size_t> order,
+                                           RowId lo, std::uint64_t span_rows) const {
     const std::size_t n = row_ids.size();
     const std::size_t k = ms.size();
     const bool sorted = order.empty();
@@ -536,7 +548,9 @@ void BinaryColumnStore::scan_span(std::span<const MeasureId> ms,
     // them matches each block's rows; duplicates advance the cursor without
     // re-reading. Each measure column is read once, front-to-back over the
     // span, in large sequential blocks the kernel readahead streams at full
-    // bandwidth.
+    // bandwidth. Blocks with no wanted row are skipped, so the bytes actually
+    // read (accumulated here) can be well below the full span on sparse input.
+    std::uint64_t bytes_read = 0;
     std::vector<double> buf;
     for (std::size_t c = 0; c < k; ++c) {
         const OnDiskColumn& col = measure_files_[ms[c]];
@@ -552,6 +566,7 @@ void BinaryColumnStore::scan_span(std::span<const MeasureId> ms,
             if (buf.size() < count) buf.resize(count);
             pread_exact(col.fd, buf.data(), count * sizeof(double),
                         static_cast<std::uint64_t>(block_begin) * sizeof(double));
+            bytes_read += count * sizeof(double);
             while (j < n) {
                 const std::size_t pos = pos_of(j);
                 const RowId r = row_ids[pos];
@@ -561,6 +576,7 @@ void BinaryColumnStore::scan_span(std::span<const MeasureId> ms,
             }
         }
     }
+    return bytes_read;
 }
 
 std::span<const double> BinaryColumnStore::read_rows(MeasureId m, RowId begin,

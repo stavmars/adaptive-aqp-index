@@ -213,16 +213,20 @@ def main() -> int:
                 [m for m in order if m in grp["method"].values]).reset_index()
             print(f"\n=== {ds} / {wl}  (nm={nm}, eb={eb:g}, mem={mem}, n={n}) ===")
             print(f"  {'method':14}{'init_s':>8}{'cum_s':>9}{'reads':>15}"
-                  f"{'p50_ms':>9}{'p95_ms':>9}{'speedup':>8}{'scan%':>7}")
+                  f"{'p50_ms':>9}{'p95_ms':>9}{'speedup':>8}{'scan%':>7}{'rd_amp':>8}")
             for _, r in sub.iterrows():
                 sp = "" if r["speedup_vs_scan"] != r["speedup_vs_scan"] else f"{r['speedup_vs_scan']:.0f}x"
-                # scan% = share of on-disk rows served by the sequential-scan
-                # path; blank for an in-memory cell (no disk reads either way).
+                # scan% = share of WANTED on-disk rows served by the scan path
+                # (a decision metric); rd_amp = device bytes actually moved over
+                # the bytes of values used (the true I/O cost the wanted-row
+                # counts hide). Both blank for an in-memory cell.
                 scf = r.get("scan_frac", float("nan"))
                 sc = "" if scf != scf else f"{scf*100:.0f}%"
+                amp = r.get("read_amplification", float("nan"))
+                ra = "" if amp != amp else f"{amp:.1f}x"
                 print(f"  {r['method']:14}{r['init_ms']/1e3:8.1f}{r['cum_ms']/1e3:9.1f}"
                       f"{r['total_reads']:15,.0f}{r['lat_p50']:9.1f}{r['lat_p95']:9.1f}"
-                      f"{sp:>8}{sc:>7}")
+                      f"{sp:>8}{sc:>7}{ra:>8}")
             fs = diagnostics(sub, eb, args.confidence, ds)
             vers = list(slice_versions.get(keys, []))
             if len(vers) > 1:

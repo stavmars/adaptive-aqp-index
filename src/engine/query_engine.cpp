@@ -223,8 +223,17 @@ void QueryEngine::read_round(const std::vector<std::uint64_t>& targets,
     // accumulate the split across rounds for the on-disk access-path metric.
     GatherPathStats path{};
     store_.gather_all(ids, vals, config_.sort_gather_by_row_id, &path);
-    metrics.scan_path_rows   += path.scan_rows;
-    metrics.gather_path_rows += path.gather_rows;
+    metrics.scan_path_rows    += path.scan_rows;
+    metrics.gather_path_rows  += path.gather_rows;
+    metrics.scan_bytes_read   += path.scan_bytes;
+    metrics.gather_bytes_read += path.gather_bytes;
+    // Record this round's path so analysis can see multi-round re-scanning. An
+    // eager (in-memory) store reports no rows on either path, so nothing is
+    // recorded and round_paths stays empty for in-memory cells.
+    if (path.scan_rows != 0 || path.gather_rows != 0) {
+        metrics.round_paths.push_back(RoundPath{round, path.scan_rows, path.gather_rows,
+                                                path.scan_bytes, path.gather_bytes});
+    }
     for (MeasureId mid = 0; mid < measure_count_; ++mid) {
         metrics.measure_reads += ids.size();
         for (std::size_t i = 0; i < ids.size(); ++i) {
