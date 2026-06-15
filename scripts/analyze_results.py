@@ -248,6 +248,34 @@ def main() -> int:
                .drop_duplicates(subset=slice_keys + ["method", "eb"]))
     summary.to_csv(analysis_root / "summary.csv", index=False)
 
+    # Read monotonicity in the error bound: an approximate method must not read
+    # MORE at a looser eb than at a tighter one within the same cell -- a looser
+    # accuracy target needs no more sampling. Such a violation is a WARN, not a FAIL:
+    # the answer still meets eb (correctness is done in validate_results.py),
+    # but extra reads at a looser target signal an inefficiency (e.g. a round-
+    # budget give-up that reads a residual whole). Reads also depend on the
+    # adaptive session (cracking/reuse) and the draw seed, so it is a warning,
+    # not an invariant. Compared across eb, so it runs once here, not per slice.
+    approx = summary[summary["method"].isin(("a3i", "adkd_sampling"))
+                     & summary["eb"].notna()]
+    for keys, grp in approx.groupby(slice_keys + ["method"], dropna=False):
+        g = grp.sort_values("eb")  # ascending eb = tighter -> looser
+        rows = list(g[["eb", "total_reads"]].itertuples(index=False))
+        for tight, loose in zip(rows, rows[1:]):
+            if loose.total_reads > tight.total_reads:
+                ds, wl, nm, mem, strv, n, method = keys
+                tot["WARN"] += 1
+                all_findings.append({
+                    "check": "reads monotone in eb", "status": "WARN",
+                    "detail": (f"{method}: eb={loose.eb:g} reads "
+                               f"{loose.total_reads:,.0f} > eb={tight.eb:g} reads "
+                               f"{tight.total_reads:,.0f} (looser bound read more)"),
+                    "dataset": ds, "workload": wl, "nm": nm, "mem": mem,
+                    "str": strv, "n": n, "eb": loose.eb})
+                print(f"     [WARN] reads monotone in eb ({ds}/{wl} {method}): "
+                      f"eb={loose.eb:g} {loose.total_reads:,.0f} > "
+                      f"eb={tight.eb:g} {tight.total_reads:,.0f}")
+
     import csv as _csv
     with open(analysis_root / "findings.csv", "w", newline="") as fh:
         w = _csv.DictWriter(fh, fieldnames=["dataset", "workload", "nm", "mem",
