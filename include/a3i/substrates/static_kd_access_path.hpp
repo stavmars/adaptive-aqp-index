@@ -3,7 +3,7 @@
 //
 // ensure_built() performs the complete top-down build in one shot: each node
 // is split at the median value of a round-robin axis until its population
-// drops to leaf_min_size (or the axis is degenerate and cannot be split).
+// drops to partition_size (or the axis is degenerate and cannot be split).
 // The whole tree therefore exists before query 0 returns; its construction
 // cost is charged to query 0 like any other substrate build.
 //
@@ -50,7 +50,7 @@ public:
 
 private:
     // Recursively split node `id` on `axis` at its median value, cycling the
-    // axis each level, until its population is at or below leaf_min_size or
+    // axis each level, until its population is at or below partition_size or
     // the split makes no progress (a degenerate, all-equal axis range).
     void build(PartitionId id, DimensionId axis);
 

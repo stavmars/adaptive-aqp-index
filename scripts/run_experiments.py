@@ -66,7 +66,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PLANS_DIR = REPO_ROOT / "experiments" / "plans"
 WORKLOAD_CONFIG_DIR = REPO_ROOT / "configs" / "workloads"
 
-AXIS_KEYS = ("runs", "workloads", "nm", "eb", "str", "mem", "run_id",
+AXIS_KEYS = ("runs", "workloads", "nm", "eb", "partition_size", "mem", "run_id",
              "run_id_by_method", "max_queries", "confidence")
 
 # Holds the single-instance flock for the process lifetime (see main()).
@@ -247,8 +247,8 @@ def mem_bytes(mem: str) -> int | None:
     return int(s)
 
 
-def cell_key(nm: int, mem: str, strv: int, q: int, eb: float, approx: bool) -> str:
-    parts = [f"mcols{nm}", f"mem{mem_tag(mem)}", f"str{strv}", f"n{q}"]
+def cell_key(nm: int, mem: str, psize: int, q: int, eb: float, approx: bool) -> str:
+    parts = [f"mcols{nm}", f"mem{mem_tag(mem)}", f"ps{psize}", f"n{q}"]
     if approx:
         parts.append(f"err{eb:g}")
     return "_".join(sorted(parts))
@@ -299,7 +299,7 @@ def workload_query_count(csv_path: Path) -> int:
 
 class Cell:
     __slots__ = ("method", "substrate", "dataset", "workload", "nm", "eb",
-                 "strv", "mem", "run_id", "max_queries", "confidence",
+                 "psize", "mem", "run_id", "max_queries", "confidence",
                  "approx", "key", "qcount")
 
     def __init__(self, **kw):
@@ -346,7 +346,7 @@ def enumerate_cells(plan: dict, catalog: dict, prepared_root: Path,
             for nm in plan["nm"]:
                 if nm > measure_counts[dataset]:
                     continue  # dataset has fewer measures than this nm
-                for strv in plan["str"]:
+                for psize in plan["partition_size"]:
                     for mem in plan["mem"]:
                         for run_id in run_ids:
                             mq = plan["max_queries"]
@@ -355,12 +355,12 @@ def enumerate_cells(plan: dict, catalog: dict, prepared_root: Path,
                             # once with no err component in the key.
                             eb_values = plan["eb"] if approx else [None]
                             for eb in eb_values:
-                                key = cell_key(nm, mem, strv, qcount,
+                                key = cell_key(nm, mem, psize, qcount,
                                                eb if eb is not None else 0.0, approx)
                                 cells.append(Cell(
                                     method=method, substrate=substrate,
                                     dataset=dataset, workload=wid, nm=nm,
-                                    eb=eb, strv=strv, mem=mem, run_id=run_id,
+                                    eb=eb, psize=psize, mem=mem, run_id=run_id,
                                     max_queries=mq, confidence=plan["confidence"],
                                     approx=approx, key=key, qcount=qcount))
     return cells
@@ -472,7 +472,7 @@ def run_cell(a3i_run: Path, cell: Cell, manifest: Path, workload_csv: Path,
            "--workload-name", cell.workload,
            "--num-measures", str(cell.nm),
            "--confidence", repr(float(cell.confidence)),
-           "--refinement-threshold", str(cell.strv),
+           "--partition-size", str(cell.psize),
            "--run-id", str(cell.run_id),
            "--cold", "true" if cold else "false"]
     if cell.eb is not None:

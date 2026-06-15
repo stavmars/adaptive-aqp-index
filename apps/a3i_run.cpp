@@ -21,7 +21,7 @@ void print_usage(std::ostream& os) {
 "               --method <name> --qresults <out.csv> --runmeta <out.json>\n"
 "               [--dataset <id>] [--workload-name <id>]\n"
 "               [--num-measures <k>] [--error-bound <eps>] [--confidence <c>]\n"
-"               [--refinement-threshold <N>] [--leaf-min-size <N>]\n"
+"               [--partition-size <N>]\n"
 "               [--stochastic-cracking] [--no-sort-gather] [--in-memory]\n"
 "               [--run-id <R>] [--max-queries <N>] [--cold true|false]\n"
 "\n"
@@ -96,7 +96,7 @@ int main(int argc, char** argv) try {
 
     a3i::CellConfig cfg;
     std::string manifest, workload, qresults, runmeta;
-    std::string nm_str, eb_str, conf_str, str_str, leaf_str, run_str, maxq_str, cold_str;
+    std::string nm_str, eb_str, conf_str, psize_str, run_str, maxq_str, cold_str;
 
     int i = 1;
     while (i < argc) {
@@ -111,8 +111,7 @@ int main(int argc, char** argv) try {
         if (eat_kv(i, argc, argv, "--num-measures", val))         { nm_str = val; continue; }
         if (eat_kv(i, argc, argv, "--error-bound", val))          { eb_str = val; continue; }
         if (eat_kv(i, argc, argv, "--confidence", val))           { conf_str = val; continue; }
-        if (eat_kv(i, argc, argv, "--refinement-threshold", val)) { str_str = val; continue; }
-        if (eat_kv(i, argc, argv, "--leaf-min-size", val))        { leaf_str = val; continue; }
+        if (eat_kv(i, argc, argv, "--partition-size", val))       { psize_str = val; continue; }
         if (eat_kv(i, argc, argv, "--run-id", val))               { run_str = val; continue; }
         if (eat_kv(i, argc, argv, "--max-queries", val))          { maxq_str = val; continue; }
         if (eat_kv(i, argc, argv, "--cold", val))                 { cold_str = val; continue; }
@@ -136,8 +135,7 @@ int main(int argc, char** argv) try {
     if (!nm_str.empty())   cfg.num_measures         = std::stoull(nm_str);
     if (!eb_str.empty())   cfg.error_bound          = std::stod(eb_str);
     if (!conf_str.empty()) cfg.confidence           = std::stod(conf_str);
-    if (!str_str.empty())  cfg.refinement_threshold = static_cast<std::uint32_t>(std::stoul(str_str));
-    if (!leaf_str.empty()) cfg.leaf_min_size        = static_cast<std::uint32_t>(std::stoul(leaf_str));
+    if (!psize_str.empty()) cfg.partition_size = static_cast<std::uint32_t>(std::stoul(psize_str));
     if (!run_str.empty())  cfg.run_id               = std::stoull(run_str);
     if (!maxq_str.empty()) cfg.max_queries          = std::stoull(maxq_str);
     if (!cold_str.empty()) cfg.cold                 = parse_bool(cold_str);

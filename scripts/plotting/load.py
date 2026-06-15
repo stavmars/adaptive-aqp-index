@@ -56,7 +56,7 @@ COST_COLS = ("latency_ms", "measure_reads", "sampled_rows", "exactified_rows",
 # Cell identity (one cell-run = one qresults file). `n` (query count) is part of
 # identity so runs with different `max_queries` are distinct cells, not pooled.
 CELL_KEYS = ("dataset", "workload", "method", "substrate",
-             "nm", "mem", "str", "n", "eb", "run_id")
+             "nm", "mem", "partition_size", "n", "eb", "run_id")
 
 
 class LoadError(Exception):
@@ -68,16 +68,16 @@ _KEY_RE = re.compile(
 
 
 def _parse_axes(key: str) -> dict:
-    """Pull nm / mem / str / n / eb out of a cell key like
-    `err0.01_mcols2_memINMEM_n100_str1024` (order-insensitive)."""
-    ax: dict = {"nm": None, "mem": None, "str": None, "n": None, "eb": None}
+    """Pull nm / mem / partition_size / n / eb out of a cell key like
+    `err0.01_mcols2_memINMEM_n100_ps1024` (order-insensitive)."""
+    ax: dict = {"nm": None, "mem": None, "partition_size": None, "n": None, "eb": None}
     for tok in key.split("_"):
         if tok.startswith("mcols"):
             ax["nm"] = int(tok[5:])
         elif tok.startswith("mem"):
             ax["mem"] = tok[3:]
-        elif tok.startswith("str"):
-            ax["str"] = int(tok[3:])
+        elif tok.startswith("ps"):
+            ax["partition_size"] = int(tok[2:])
         elif tok.startswith("n") and tok[1:].isdigit():
             ax["n"] = int(tok[1:])
         elif tok.startswith("err"):
@@ -135,7 +135,7 @@ def _cell_rows(qpath: Path) -> list[dict]:
 
     ident = dict(dataset=dataset, workload=workload, method=method,
                  substrate=substrate, nm=ax["nm"], mem=ax["mem"],
-                 str=ax["str"], n=ax["n"], eb=ax["eb"], run_id=run_id,
+                 partition_size=ax["partition_size"], n=ax["n"], eb=ax["eb"], run_id=run_id,
                  init_ms=float(meta.get("init_ms", 0.0)),
                  cold=bool(meta.get("cold")),
                  measure_storage=meta.get("measure_storage"),

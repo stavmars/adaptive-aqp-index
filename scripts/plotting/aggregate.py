@@ -110,7 +110,7 @@ def _with_speedup(out: pd.DataFrame) -> pd.DataFrame:
     # speedup = scan cumulative / this method's cumulative, within the comparable
     # slice (same nm/mem/str/n) -- not just (dataset, workload), or multiple nm
     # would match several scan cells and duplicate every row.
-    slice_cols = ["dataset", "workload", "nm", "mem", "str", "n"]
+    slice_cols = ["dataset", "workload", "nm", "mem", "partition_size", "n"]
     scan = (out[out["method"] == "scan"][slice_cols + ["cum_ms"]]
             .rename(columns={"cum_ms": "scan_cum_ms"}))
     out = out.merge(scan, on=slice_cols, how="left")

@@ -50,7 +50,7 @@ PartitionId AdaptiveKdAccessPath::crack_partition_to_query(PartitionId id,
 
     // Each lower bound trims off the points below the query; keep the >= child.
     for (DimensionId axis = 0; axis < d; ++axis) {
-        if (tree_.population(cur) <= config_.refinement_threshold) return cur;
+        if (tree_.population(cur) <= config_.partition_size) return cur;
         auto split = tree_.split_node(*table_, cur, axis, q.dims[axis].low);
         if (split) {
             retired.push_back(cur);
@@ -59,7 +59,7 @@ PartitionId AdaptiveKdAccessPath::crack_partition_to_query(PartitionId id,
     }
     // Each upper bound trims off the points at or above the query; keep the < child.
     for (DimensionId axis = 0; axis < d; ++axis) {
-        if (tree_.population(cur) <= config_.refinement_threshold) return cur;
+        if (tree_.population(cur) <= config_.partition_size) return cur;
         auto split = tree_.split_node(*table_, cur, axis, q.dims[axis].high);
         if (split) {
             retired.push_back(cur);
@@ -78,7 +78,7 @@ std::vector<PartitionId> AdaptiveKdAccessPath::refine(PartitionId id,
     }
 
     std::vector<PartitionId> retired;
-    if (tree_.population(id) <= config_.refinement_threshold) {
+    if (tree_.population(id) <= config_.partition_size) {
         // Too small to crack: the caller treats it as a boundary leaf.
         return retired;
     }

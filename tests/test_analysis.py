@@ -75,8 +75,8 @@ def write_cell(root, dataset, workload, substrate, method, key, run, n,
 
 
 EXACT3 = lambda q: _aggs(["m0", "m1"], lambda a, m: 100.0, exact=True)   # noqa: E731
-KEY = "mcols2_memINMEM_n3_str1024"
-KEYE = "err0.01_mcols2_memINMEM_n3_str1024"
+KEY = "mcols2_memINMEM_n3_ps1024"
+KEYE = "err0.01_mcols2_memINMEM_n3_ps1024"
 
 
 @unittest.skipUnless(_HAVE_DEPS, "pandas not available")
@@ -121,7 +121,7 @@ class TestLoad(unittest.TestCase):
             write_cell(t, "ds", "wl", "n_a", "scan", KEY, 0, 3, EXACT3)
             # permuted key tokens -> same parsed identity, different filename
             write_cell(t, "ds", "wl", "n_a", "scan",
-                       "str1024_mcols2_n3_memINMEM", 0, 3, EXACT3)
+                       "ps1024_mcols2_n3_memINMEM", 0, 3, EXACT3)
             with self.assertRaises(LoadError):
                 load.load_frame(t)
 
@@ -280,8 +280,8 @@ class TestMultiNm(unittest.TestCase):
         approx = lambda q: _aggs(["m0", "m1"], lambda a, m: 100.5, exact=False,  # noqa: E731
                                  ci=lambda a, m, e: (95.0, 105.0))
         with tempfile.TemporaryDirectory() as t, tempfile.TemporaryDirectory() as a:
-            for k, ek in (("mcols1_memINMEM_n3_str1024", "err0.01_mcols1_memINMEM_n3_str1024"),
-                          ("mcols2_memINMEM_n3_str1024", "err0.01_mcols2_memINMEM_n3_str1024")):
+            for k, ek in (("mcols1_memINMEM_n3_ps1024", "err0.01_mcols1_memINMEM_n3_ps1024"),
+                          ("mcols2_memINMEM_n3_ps1024", "err0.01_mcols2_memINMEM_n3_ps1024")):
                 write_cell(t, "ds", "wl", "n_a", "scan", k, 0, 3, EXACT3,
                            latency=10.0, reads=1000)
                 write_cell(t, "ds", "wl", "adaptive_kd", "a3i", ek, 0, 3, approx,
@@ -302,10 +302,10 @@ class TestMultiNm(unittest.TestCase):
         approx = lambda q: _aggs(["m0", "m1"], lambda a, m: 100.5, exact=False,  # noqa: E731
                                  ci=lambda a, m, e: (95.0, 105.0))
         with tempfile.TemporaryDirectory() as t, tempfile.TemporaryDirectory() as a:
-            write_cell(t, "ds", "wl", "n_a", "scan", "mcols1_memINMEM_n3_str1024",
+            write_cell(t, "ds", "wl", "n_a", "scan", "mcols1_memINMEM_n3_ps1024",
                        0, 3, EXACT3, latency=10.0, reads=1000, version="0.1.0")
             write_cell(t, "ds", "wl", "adaptive_kd", "a3i",
-                       "err0.01_mcols1_memINMEM_n3_str1024", 0, 3, approx,
+                       "err0.01_mcols1_memINMEM_n3_ps1024", 0, 3, approx,
                        latency=1.5, reads=60, version="0.2.0")
             argv = sys.argv
             try:

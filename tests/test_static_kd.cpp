@@ -29,9 +29,9 @@ IndexTable make_grid() {
     return IndexTable::from_columns({xs, ys});
 }
 
-SubstrateConfig config(std::uint32_t leaf_min_size) {
+SubstrateConfig config(std::uint32_t partition_size) {
     SubstrateConfig cfg;
-    cfg.leaf_min_size   = leaf_min_size;
+    cfg.partition_size   = partition_size;
     return cfg;
 }
 
@@ -98,7 +98,7 @@ ActiveClassification classify_active(const AdaptiveAccessPath& path,
 
 TEST(StaticKd, BuildSplitsDownToLeafSize) {
     IndexTable table = make_grid();
-    StaticKdAccessPath path(config(/*leaf_min_size=*/16));
+    StaticKdAccessPath path(config(/*partition_size=*/16));
     path.prepare(table);
     path.ensure_built();
 
@@ -106,7 +106,7 @@ TEST(StaticKd, BuildSplitsDownToLeafSize) {
     EXPECT_GT(active.size(), 1u) << "a 256-point table must split";
     for (PartitionId id : active) {
         PartitionView pv = path.partition(id);
-        EXPECT_LE(pv.end - pv.begin, 16u) << "leaf exceeds leaf_min_size";
+        EXPECT_LE(pv.end - pv.begin, 16u) << "leaf exceeds partition_size";
     }
     check_cover(path, table);
     check_points_in_bounds(path, table);
@@ -120,7 +120,7 @@ TEST(StaticKd, MaxValuedPointLiesInsideItsLeafBounds) {
     const std::vector<double> xs{0.0, 3.0, 6.0, 9.0, 12.0};
     const std::vector<double> ys{0.0, 3.0, 6.0, 9.0, 12.0};  // (12,12) is the max
     IndexTable table = IndexTable::from_columns({xs, ys});
-    StaticKdAccessPath path(config(/*leaf_min_size=*/2));
+    StaticKdAccessPath path(config(/*partition_size=*/2));
     path.prepare(table);
     path.ensure_built();
 
@@ -130,7 +130,7 @@ TEST(StaticKd, MaxValuedPointLiesInsideItsLeafBounds) {
 
 TEST(StaticKd, SingleLeafWhenThresholdExceedsTable) {
     IndexTable table = make_grid();
-    StaticKdAccessPath path(config(/*leaf_min_size=*/1000));
+    StaticKdAccessPath path(config(/*partition_size=*/1000));
     path.prepare(table);
     path.ensure_built();
     EXPECT_EQ(path.active_partitions().size(), 1u);
@@ -139,7 +139,7 @@ TEST(StaticKd, SingleLeafWhenThresholdExceedsTable) {
 
 TEST(StaticKd, LocateClassifiesContainedAndPartial) {
     IndexTable table = make_grid();
-    StaticKdAccessPath path(config(/*leaf_min_size=*/16));
+    StaticKdAccessPath path(config(/*partition_size=*/16));
     path.prepare(table);
     path.ensure_built();
 
@@ -164,7 +164,7 @@ TEST(StaticKd, LocateClassifiesContainedAndPartial) {
 
 TEST(StaticKd, WholeDomainIsAllContained) {
     IndexTable table = make_grid();
-    StaticKdAccessPath path(config(/*leaf_min_size=*/16));
+    StaticKdAccessPath path(config(/*partition_size=*/16));
     path.prepare(table);
     path.ensure_built();
 
@@ -181,7 +181,7 @@ TEST(StaticKd, WholeDomainIsAllContained) {
 
 TEST(StaticKd, RefineIsNoOp) {
     IndexTable table = make_grid();
-    StaticKdAccessPath path(config(/*leaf_min_size=*/16));
+    StaticKdAccessPath path(config(/*partition_size=*/16));
     path.prepare(table);
     path.ensure_built();
 
@@ -200,7 +200,7 @@ TEST(StaticKd, RefineIsNoOp) {
 
 TEST(StaticKd, AncestryReachesParentlessRoot) {
     IndexTable table = make_grid();
-    StaticKdAccessPath path(config(/*leaf_min_size=*/16));
+    StaticKdAccessPath path(config(/*partition_size=*/16));
     path.prepare(table);
     path.ensure_built();
 
@@ -219,7 +219,7 @@ TEST(StaticKd, AncestryReachesParentlessRoot) {
 TEST(StaticKd, RefineWrongTableThrows) {
     IndexTable table = make_grid();
     IndexTable other = make_grid();
-    StaticKdAccessPath path(config(/*leaf_min_size=*/16));
+    StaticKdAccessPath path(config(/*partition_size=*/16));
     path.prepare(table);
     path.ensure_built();
     EXPECT_THROW(path.refine(0, HyperRect{{{3.0, 11.0}, {3.0, 11.0}}}, other),
@@ -227,7 +227,7 @@ TEST(StaticKd, RefineWrongTableThrows) {
 }
 
 TEST(StaticKd, RangesNotRowIdOrdered) {
-    StaticKdAccessPath path(config(/*leaf_min_size=*/16));
+    StaticKdAccessPath path(config(/*partition_size=*/16));
     EXPECT_FALSE(path.ranges_are_row_id_ordered());
 }
 

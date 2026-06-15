@@ -40,7 +40,7 @@ from plotting import aggregate, figures, load, render
 # the always-reduced run_id). `substrate` is intentionally excluded: it is bound
 # to the method (each method has one substrate), so it co-varies with a method
 # comparison rather than being an independent axis.
-COMPARE_AXES = ("method", "nm", "str", "eb", "n")
+COMPARE_AXES = ("method", "nm", "partition_size", "eb", "n")
 # Hard-constraint axes: kept fixed unless a declared sweep varies them, never
 # auto-varied in exploration.
 HARD_AXES = ("mem",)

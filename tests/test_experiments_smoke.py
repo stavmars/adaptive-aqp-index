@@ -69,7 +69,7 @@ def write_plan_tree(work: Path, dataset_id: str) -> tuple[Path, Path]:
         f"workloads: [{dataset_id}_clustered]\n"
         "nm: [1, 2]\n"
         "eb: [0.05]\n"
-        "str: [1024]\n"
+        "partition_size: [1024]\n"
         "mem: [unbounded]\n"
         "run_id: [0, 1]\n"
         "run_id_by_method: {scan: [0]}\n"   # scan once; other methods twice

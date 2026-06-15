@@ -35,7 +35,7 @@ IndexTable make_grid() {
 
 SubstrateConfig config(std::uint32_t threshold) {
     SubstrateConfig cfg;
-    cfg.refinement_threshold = threshold;
+    cfg.partition_size = threshold;
     return cfg;
 }
 

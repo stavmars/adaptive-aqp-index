@@ -147,7 +147,7 @@ struct Workload {
     IndexTable make_table() const { return IndexTable::from_columns({xs, ys}); }
 
     // The production substrate configuration: a single root with the default
-    // crack gate (refinement_threshold == 1024), deliberately not overridden.
+    // crack gate (partition_size == 1024), deliberately not overridden.
     SubstrateConfig substrate() const {
         SubstrateConfig cfg;
         return cfg;

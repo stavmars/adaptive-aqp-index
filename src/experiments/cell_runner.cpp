@@ -326,9 +326,8 @@ CellReport run_cell(const CellConfig& config) {
     double init_ms = 0.0;
     if (!spec.is_scan) {
         SubstrateConfig scfg;
-        scfg.refinement_threshold = config.refinement_threshold;
-        scfg.stochastic_cracking  = config.stochastic_cracking;
-        scfg.leaf_min_size        = config.leaf_min_size;
+        scfg.partition_size      = config.partition_size;
+        scfg.stochastic_cracking = config.stochastic_cracking;
         // Size the index to the observed data extent (per-dimension min/max),
         // not the declared domain; the declared domain is the workload's.
         scfg.data_bounds.dims.reserve(manifest.dimensions.size());
@@ -387,8 +386,7 @@ CellReport run_cell(const CellConfig& config) {
         meta["num_measures"]         = served;
         meta["error_bound"]          = config.error_bound;
         meta["confidence"]           = config.confidence;
-        meta["refinement_threshold"] = config.refinement_threshold;
-        meta["leaf_min_size"]        = config.leaf_min_size;
+        meta["partition_size"]       = config.partition_size;
         meta["stochastic_cracking"]  = config.stochastic_cracking;
         meta["sort_gather_by_row_id"] = config.sort_gather_by_row_id;
         meta["measure_storage"]      =

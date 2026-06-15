@@ -177,7 +177,7 @@ def main() -> int:
     # the approximate methods are taken one eb at a time. So the analysis runs
     # once per (slice, eb) -- every error bound present is checked, no --eb needed
     # (pass --eb only to restrict to one).
-    slice_keys = ["dataset", "workload", "nm", "mem", "str", "n"]
+    slice_keys = ["dataset", "workload", "nm", "mem", "partition_size", "n"]
     order = ["scan", "kd", "kd_agg", "adkd", "adkd_agg", "adkd_sampling", "a3i"]
 
     if args.eb is not None:
@@ -204,7 +204,7 @@ def main() -> int:
         summaries.append(summ)
 
         for keys, grp in summ.groupby(slice_keys, dropna=False):
-            ds, wl, nm, mem, strv, n = keys
+            ds, wl, nm, mem, psize, n = keys
             # An eb context is only meaningful where an approximate method ran at
             # it; an exact-only slice is already covered under its own eb.
             if not grp["method"].isin(("a3i", "adkd_sampling")).any():
@@ -232,7 +232,7 @@ def main() -> int:
             for f in fs:
                 tot[f["status"]] += 1
                 f.update(dataset=ds, workload=wl, nm=nm, mem=mem,
-                         str=strv, n=n, eb=eb)
+                         partition_size=psize, n=n, eb=eb)
                 all_findings.append(f)
                 if f["status"] != "PASS":
                     print(f"     [{f['status']}] {f['check']} "
@@ -259,7 +259,7 @@ def main() -> int:
         rows = list(g[["eb", "total_reads"]].itertuples(index=False))
         for tight, loose in zip(rows, rows[1:]):
             if loose.total_reads > tight.total_reads:
-                ds, wl, nm, mem, strv, n, method = keys
+                ds, wl, nm, mem, psize, n, method = keys
                 tot["WARN"] += 1
                 all_findings.append({
                     "check": "reads monotone in eb", "status": "WARN",
@@ -267,7 +267,7 @@ def main() -> int:
                                f"{loose.total_reads:,.0f} > eb={tight.eb:g} reads "
                                f"{tight.total_reads:,.0f} (looser bound read more)"),
                     "dataset": ds, "workload": wl, "nm": nm, "mem": mem,
-                    "str": strv, "n": n, "eb": loose.eb})
+                    "partition_size": psize, "n": n, "eb": loose.eb})
                 print(f"     [WARN] reads monotone in eb ({ds}/{wl} {method}): "
                       f"eb={loose.eb:g} {loose.total_reads:,.0f} > "
                       f"eb={tight.eb:g} {tight.total_reads:,.0f}")
@@ -275,7 +275,7 @@ def main() -> int:
     import csv as _csv
     with open(analysis_root / "findings.csv", "w", newline="") as fh:
         w = _csv.DictWriter(fh, fieldnames=["dataset", "workload", "nm", "mem",
-                                            "str", "n", "eb", "check", "status",
+                                            "partition_size", "n", "eb", "check", "status",
                                             "detail"])
         w.writeheader()
         w.writerows(all_findings)

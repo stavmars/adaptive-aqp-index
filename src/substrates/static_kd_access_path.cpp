@@ -28,7 +28,7 @@ double StaticKdAccessPath::median_value(PartitionId id, DimensionId axis) const 
 }
 
 void StaticKdAccessPath::build(PartitionId id, DimensionId axis) {
-    if (tree_.population(id) <= static_cast<IndexPos>(config_.leaf_min_size)) {
+    if (tree_.population(id) <= static_cast<IndexPos>(config_.partition_size)) {
         return;
     }
     const double pivot = median_value(id, axis);

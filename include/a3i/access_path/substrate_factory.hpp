@@ -22,7 +22,7 @@ namespace a3i {
 
 /// Construction-time parameters shared by substrates. A substrate uses
 /// only the fields it needs (the KD substrates build the root from
-/// `data_bounds` and use `refinement_threshold` as the crack gate).
+/// `data_bounds` and cap each partition at `partition_size`).
 struct SubstrateConfig {
     /// Observed extent of the data per dimension ([min, max] on each axis).
     /// The index sizes its root partition to the data itself, not to any
@@ -31,9 +31,10 @@ struct SubstrateConfig {
     /// experiment layer. May be left empty, in which case the substrate
     /// derives the extent from the table at build time.
     HyperRect     data_bounds;
-    std::uint32_t refinement_threshold = 1024;
-    bool          stochastic_cracking   = false;
-    std::uint32_t leaf_min_size         = 1024;  ///< Used by the static build.
+    /// Maximum rows per partition: the adaptive substrate cracks down to it,
+    /// the static substrate splits down to it.
+    std::uint32_t partition_size       = 1024;
+    bool          stochastic_cracking  = false;
 };
 
 class SubstrateFactory {

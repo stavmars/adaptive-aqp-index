@@ -105,9 +105,9 @@ struct Fixture {
 
     IndexTable make_table() const { return IndexTable::from_columns({xs, ys}); }
 
-    SubstrateConfig substrate(std::uint32_t refinement_threshold = 16) const {
+    SubstrateConfig substrate(std::uint32_t partition_size = 16) const {
         SubstrateConfig cfg;
-        cfg.refinement_threshold = refinement_threshold;
+        cfg.partition_size = partition_size;
         return cfg;
     }
 };

@@ -30,7 +30,7 @@ IndexTable make_grid() {
 
 SubstrateConfig config(std::uint32_t threshold) {
     SubstrateConfig cfg;
-    cfg.refinement_threshold = threshold;
+    cfg.partition_size = threshold;
     return cfg;
 }
 
@@ -191,7 +191,7 @@ TEST(Partitioner, FailedCrackLeavesPartitionUnchanged) {
     // exercises the failed-crack path; normally the extent tracks the data.)
     SubstrateConfig cfg;
     cfg.data_bounds = HyperRect{{{0.0, 100.0}, {0.0, 100.0}}};
-    cfg.refinement_threshold = 4;
+    cfg.partition_size = 4;
     AdaptiveKdAccessPath path(cfg);
     path.prepare(table);
     path.ensure_built();

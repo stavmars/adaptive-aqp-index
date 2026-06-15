@@ -56,8 +56,7 @@ struct CellConfig {
     double confidence  = 0.95;
 
     /// Substrate construction knobs.
-    std::uint32_t refinement_threshold = 1024;
-    std::uint32_t leaf_min_size        = 1024;
+    std::uint32_t partition_size       = 1024;
     bool          stochastic_cracking  = false;
 
     /// Sort each round's gathered row ids ascending before reading measures

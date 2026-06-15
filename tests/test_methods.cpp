@@ -109,7 +109,7 @@ struct Fixture {
 
     SubstrateConfig substrate() const {
         SubstrateConfig cfg;
-        cfg.refinement_threshold = 16;
+        cfg.partition_size = 16;
         return cfg;
     }
 };

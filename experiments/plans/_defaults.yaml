@@ -8,7 +8,7 @@
 #   nm          number of measures served (first-k of the schema order); values
 #               exceeding a dataset's measure count are pruned per dataset
 #   eb          error bound; applied to APPROXIMATE runs only (a3i, adkd_sampling)
-#   str         refinement threshold
+#   partition_size  maximum rows per partition (e.g the leaf size in kd tree, or the cracking threshold in an adaptive substrate)
 #   mem         memory setting per run: unbounded (mmap, no cap), inmem (measure
 #               columns loaded fully resident, no cap), or a cap like 16GiB (mmap
 #               under a cgroup budget). The measure storage backing follows from it.
@@ -33,7 +33,7 @@ workloads:
 
 nm: [4]
 eb: [0.01]
-str: [1024]
+partition_size: [1024]
 mem: [inmem]
 run_id: [0]
 run_id_by_method:
