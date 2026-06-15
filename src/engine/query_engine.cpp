@@ -183,7 +183,7 @@ bool QueryEngine::read_round(const std::vector<std::uint64_t>& targets,
             if (target <= sampled) continue;
             const std::uint64_t delta = target - sampled;
             ResidualPartition& p = residual_[h];
-            Rng rng(mix_seed(ordinal, round, h, target));
+            Rng rng(mix_seed(ordinal, round, h));
             StratumCursor c;
             if (p.reusable) {
                 c = make_reusable_sampled_cursor(table_, p.begin, p.size, *p.tracker,

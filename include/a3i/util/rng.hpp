@@ -21,19 +21,17 @@ namespace a3i {
 /// draw through standard distributions at the call site.
 using Rng = std::mt19937_64;
 
-/// Derive a reproducible seed from the coordinates of a sampling draw so that
-/// cumulative rounds are reproducible and non-overlapping.
+/// Derive a reproducible per-draw seed from (query, round, stratum): each gets
+/// an independent stream, so a stratum's rounds draw fresh, uncorrelated
+/// randomness.
 inline std::uint64_t mix_seed(std::uint64_t query_ordinal, std::uint64_t round,
-                              std::uint64_t stratum_ordinal,
-                              std::uint64_t target) {
+                              std::uint64_t stratum_ordinal) {
     std::seed_seq seq{static_cast<std::uint32_t>(query_ordinal),
                       static_cast<std::uint32_t>(query_ordinal >> 32),
                       static_cast<std::uint32_t>(round),
                       static_cast<std::uint32_t>(round >> 32),
                       static_cast<std::uint32_t>(stratum_ordinal),
-                      static_cast<std::uint32_t>(stratum_ordinal >> 32),
-                      static_cast<std::uint32_t>(target),
-                      static_cast<std::uint32_t>(target >> 32)};
+                      static_cast<std::uint32_t>(stratum_ordinal >> 32)};
     std::uint32_t out[2];
     seq.generate(out, out + 2);
     return (static_cast<std::uint64_t>(out[1]) << 32) | out[0];
