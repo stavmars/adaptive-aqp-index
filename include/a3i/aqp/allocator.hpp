@@ -42,11 +42,6 @@ struct AllocatorConfig {
     /// variance becomes too loose to plan with). Strata at or below twice
     /// this size are read whole instead of piloted.
     std::uint64_t pilot_sample_size = 32;
-    /// Per-stratum finish rule: when a planned draw would read more than this
-    /// fraction of a stratum's REMAINING rows, read the stratum to completion
-    /// instead -zero residual variance, and (for a
-    /// reusable stratum) a persistent exact summary.
-    double        exactification_sample_fraction = 0.5;
     /// Total read rounds per query, counting the pilot and the terminal
     /// full read of the residual if one is needed.
     std::uint64_t max_sampling_rounds = 4;

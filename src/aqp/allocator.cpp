@@ -221,19 +221,9 @@ AllocationPlan Allocator::plan(const std::vector<StratumAlloc>& strata,
     plan.target.resize(H);
     for (std::size_t h = 0; h < H; ++h) {
         std::uint64_t t = std::min(target_n[h], strata[h].N);
-        t = std::max(t, strata[h].sampled);  // cumulative targets are monotone
-        // Finish rule: a draw that reads most of what remains is better spent
-        // reading the stratum whole -- nearly the same cost, zero residual
-        // variance, and a persistent exact summary when the stratum persists.
-        const std::uint64_t remaining = strata[h].N - strata[h].sampled;
-        if (t > strata[h].sampled &&
-            static_cast<double>(t - strata[h].sampled) >
-                cfg_.exactification_sample_fraction *
-                    static_cast<double>(remaining)) {
-            t = strata[h].N;
-        }
+        t = std::max(t, strata[h].sampled);
         plan.target[h] = t;
-        plan.remaining_residual += remaining;
+        plan.remaining_residual += strata[h].N - strata[h].sampled;
         if (t > strata[h].sampled) {
             plan.planned_new_reads += t - strata[h].sampled;
             plan.no_target_increase = false;

@@ -106,28 +106,25 @@ TEST(Allocator, TightTargetSaturatesToTakeAll) {
     EXPECT_EQ(plan.target[0], 100000u);
 }
 
-// Every planned target either stays within the per-stratum finish fraction of
-// the stratum's remaining rows or jumps to the full population: a plan never
-// schedules a sampling round that reads most of a stratum yet leaves a
-// remnant unread.
-TEST(Allocator, FinishRuleLeavesNoNearlyFullStratum) {
-    Allocator alloc;  // exactification_sample_fraction = 0.5
-    for (double rel : {0.20, 0.10, 0.05, 0.02, 0.01}) {
-        std::vector<StratumAlloc> strata = {
-            stratum(2000, 600, 600, 6000.0, 80000.0),
-            stratum(100000, 100, 100, 1000.0, 20000.0)};
-        auto plan = alloc.plan(strata, estimates(1.1e6, 102000), target(rel), 10.0);
-        for (std::size_t h = 0; h < strata.size(); ++h) {
-            const std::uint64_t s = strata[h].sampled;
-            const std::uint64_t remaining = strata[h].N - s;
-            const std::uint64_t delta = plan.target[h] - s;
-            const bool within = static_cast<double>(delta) <= 0.5 * remaining;
-            const bool full = plan.target[h] == strata[h].N;
-            EXPECT_TRUE(within || full)
-                << "rel " << rel << " stratum " << h << " target "
-                << plan.target[h];
-        }
+// A partial draw is never rounded up to the whole stratum: when the budget
+// does not demand the full population, the plan targets only the Neyman sample
+// (finish rule removed -- reuse accumulates incrementally instead, and the
+// on-disk cost model reads a stratum whole only when a scan is cheaper).
+TEST(Allocator, PartialDrawIsNotRoundedToFull) {
+    Allocator alloc;
+    std::vector<StratumAlloc> strata = {
+        stratum(2000, 600, 600, 6000.0, 80000.0),
+        stratum(100000, 100, 100, 1000.0, 20000.0)};
+    auto plan = alloc.plan(strata, estimates(1.1e6, 102000), target(0.05), 10.0);
+    // A moderate target that needs well under the full stratum must stay a
+    // sample, not jump to N.
+    bool any_partial = false;
+    for (std::size_t h = 0; h < strata.size(); ++h) {
+        EXPECT_LE(plan.target[h], strata[h].N);
+        if (plan.target[h] > strata[h].sampled && plan.target[h] < strata[h].N)
+            any_partial = true;
     }
+    EXPECT_TRUE(any_partial) << "expected at least one stratum sampled, not taken whole";
 }
 
 // The variance upper bound shrinks with the sample size: with identical

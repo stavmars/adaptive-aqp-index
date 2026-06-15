@@ -326,6 +326,9 @@ bool BinaryColumnStore::would_scan(RowId lo, RowId hi, std::size_t n) const {
     // at the device's random-read rate; scanning reads every page in the span
     // at the streaming rate and filters in memory. The scan wins once the
     // touched fraction reaches the device's random/sequential bandwidth ratio.
+    // touched_fraction is the expected value under uniform scatter (exact
+    // there); an exact count from the coalesced ranges would be more precise
+    // for clustered ids but the scan branch never builds them.
     const std::uint64_t span_rows = static_cast<std::uint64_t>(hi - lo) + 1;
     const double frac = static_cast<double>(n) / static_cast<double>(span_rows);
     const double touched_fraction =
