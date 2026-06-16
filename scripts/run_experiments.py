@@ -346,7 +346,11 @@ def enumerate_cells(plan: dict, catalog: dict, prepared_root: Path,
             for nm in plan["nm"]:
                 if nm > measure_counts[dataset]:
                     continue  # dataset has fewer measures than this nm
-                for psize in plan["partition_size"]:
+                # Scan ignores partition_size; emit one
+                # cell instead of a redundant copy per size.
+                has_substrate = substrate != "n/a"
+                psizes = plan["partition_size"] if has_substrate else plan["partition_size"][:1]
+                for psize in psizes:
                     for mem in plan["mem"]:
                         for run_id in run_ids:
                             mq = plan["max_queries"]
