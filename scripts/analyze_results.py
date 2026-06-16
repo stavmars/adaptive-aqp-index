@@ -211,7 +211,8 @@ def main() -> int:
                 continue
             sub = grp.set_index("method").reindex(
                 [m for m in order if m in grp["method"].values]).reset_index()
-            print(f"\n=== {ds} / {wl}  (nm={nm}, eb={eb:g}, mem={mem}, n={n}) ===")
+            print(f"\n=== {ds} / {wl}  (nm={nm}, eb={eb:g}, "
+                  f"partition_size={psize}, mem={mem}, n={n}) ===")
             print(f"  {'method':14}{'init_s':>8}{'cum_s':>9}{'reads':>15}"
                   f"{'p50_ms':>9}{'p95_ms':>9}{'speedup':>8}{'scan%':>7}")
             for _, r in sub.iterrows():
@@ -242,6 +243,15 @@ def main() -> int:
     # Exact methods are evaluated in every eb's slice; keep one row per cell.
     summary = (pd.concat(summaries, ignore_index=True)
                .drop_duplicates(subset=slice_keys + ["method", "eb"]))
+    # Lead with the cell identity, then the headline cost metrics, so the file
+    # opens on what matters; any remaining columns keep their order at the end.
+    lead = ["dataset", "workload", "method", "substrate", "nm", "mem",
+            "partition_size", "n", "eb",
+            "init_ms", "cum_ms", "total_latency_ms",
+            "lat_p50", "lat_p95", "lat_p99", "total_reads", "speedup_vs_scan"]
+    ordered = [c for c in lead if c in summary.columns]
+    ordered += [c for c in summary.columns if c not in ordered]
+    summary = summary[ordered]
     summary.to_csv(analysis_root / "summary.csv", index=False)
 
     # Read monotonicity in the error bound: an approximate method must not read

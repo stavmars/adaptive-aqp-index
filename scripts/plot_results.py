@@ -203,6 +203,10 @@ def main(argv=None) -> int:
     ap.add_argument("--nm", type=int, default=figures.PIN_DEFAULTS["nm"],
                     help="number of measures the comparison figures pin to; "
                          f"falls back to the largest present (default {figures.PIN_DEFAULTS['nm']})")
+    ap.add_argument("--partition-size", type=int,
+                    default=figures.PIN_DEFAULTS["partition_size"],
+                    help="partition size the comparison figures pin to "
+                         f"(default {figures.PIN_DEFAULTS['partition_size']})")
     ap.add_argument("--strict", action="store_true",
                     help="fail if a declared figure's required cells are absent")
     ap.add_argument("--per-query-head", type=int, default=None,
@@ -226,7 +230,12 @@ def main(argv=None) -> int:
         workloads=[args.workload] if args.workload else None)
 
     if args.explore:
-        explore(frame, Path(args.out_dir or "experiments/plots/explore"), args.eb)
+        # Hold the within-facet axes fixed so a facet varies only on method:
+        # approximate methods at the chosen eb (exact methods carry no eb), all
+        # at the chosen partition size.
+        pinned = frame[(frame["eb"] == args.eb) | frame["eb"].isna()]
+        pinned = pinned[pinned["partition_size"] == args.partition_size]
+        explore(pinned, Path(args.out_dir or "experiments/plots/explore"), args.eb)
     else:
         default = (f"experiments/plots/{args.plan}" if args.plan
                    else "experiments/plots/figures")

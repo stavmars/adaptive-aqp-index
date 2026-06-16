@@ -38,7 +38,7 @@ APPROX = ("a3i", "adkd_sampling")
 # run from the CLI (--nm, --eb). A pinned nm that is absent in a facet falls back
 # to the largest present there. (Selectivity and dataset size are not here: they
 # are part of the (dataset, workload) facet identity, not within-facet axes.)
-PIN_DEFAULTS = {"eb": 0.01, "nm": 4}
+PIN_DEFAULTS = {"eb": 0.01, "nm": 4, "partition_size": 1024}
 
 # Optional cap on the per-query figure: show only the first N queries to zoom
 # into the convergence region. Default None -> the full run, so late adaptation

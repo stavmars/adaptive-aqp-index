@@ -436,6 +436,7 @@ def validate_run(csv_path: Path, oracles: dict[int, Oracle],
         "num_measures": runmeta.get("num_measures"),
         "sort_gather_by_row_id": runmeta.get("sort_gather_by_row_id"),
         "measure_storage": runmeta.get("measure_storage"),
+        "partition_size": runmeta.get("partition_size"),
         "error_bound": eb, "confidence": conf, "run_id": runmeta.get("run_id"),
         "exact_checked": n_exact, "exact_failed": n_exact_fail,
         "approx_checked": n_approx,
@@ -524,13 +525,13 @@ def _interval_brackets(est: float, lo: float, hi: float) -> bool:
 # --- output ------------------------------------------------------------------
 
 SUMMARY_COLS = ["dataset", "workload", "method", "substrate", "num_measures",
-                "sort_gather_by_row_id", "measure_storage",
+                "sort_gather_by_row_id", "measure_storage", "partition_size",
                 "error_bound", "confidence", "run_id", "exact_checked",
                 "exact_failed", "approx_checked", "approx_within_eb_frac",
                 "coverage_frac", "max_rel_err", "guard_failed",
                 "init_ms", "query_ms_total", "cumulative_ms", "status"]
 COVERAGE_COLS = ["dataset", "workload", "method", "substrate", "num_measures",
-                 "sort_gather_by_row_id", "measure_storage",
+                 "sort_gather_by_row_id", "measure_storage", "partition_size",
                  "error_bound", "confidence", "aggregate", "measure", "n_runs",
                  "mean_coverage", "coverage_upper", "coverage_status",
                  "zero_coverage_positions", "basis"]
@@ -644,6 +645,7 @@ def main() -> int:
                     "num_measures": cell_meta["num_measures"],
                     "sort_gather_by_row_id": cell_meta["sort_gather_by_row_id"],
                     "measure_storage": cell_meta["measure_storage"],
+                    "partition_size": cell_meta["partition_size"],
                     "error_bound": cell_meta["error_bound"], "confidence": nominal,
                     "measure": ma[0], "aggregate": ma[1], **judged})
                 if judged["coverage_status"] == "low":
