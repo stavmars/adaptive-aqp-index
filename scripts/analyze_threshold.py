@@ -39,15 +39,15 @@ METRICS = ["total_reads", "cum_ms", "total_latency_ms", "lat_p50"]
 FIG_METRICS = [("cum_ms", "cumulative time"),
                ("total_reads", "measure reads"),
                ("lat_p50", "p50 query latency")]
-METHOD_ORDER = ["a3i", "adkd_agg", "kd_agg"]
-MARKERS = {"a3i": "o", "adkd_agg": "s", "kd_agg": "^"}
+METHOD_ORDER = ["a3i_akd", "akd_agg", "kd_agg"]
+MARKERS = {"a3i_akd": "o", "akd_agg": "s", "kd_agg": "^"}
 SIZES = [128, 256, 512, 1024, 2048, 4096]
 DEFAULT_SIZE = 1024
 
 # Accuracy view: oracle-validated metrics per cell, from validate_results.py.
 # The approximate method we tune is a3i; the exact methods carry no error.
 VAL_DEFAULT = "experiments/validation"
-ACC_METHOD = "a3i"
+ACC_METHOD = "a3i_akd"
 NOMINAL_COVERAGE = 0.95
 LOW_COVERAGE = 0.93  # below this a per-measure cell is called out
 # (column, label) for the accuracy tables/figure, in display order.
@@ -102,14 +102,14 @@ def print_tables(df: pd.DataFrame, metric_filter: str | None) -> None:
         print(f"=== {m}: each size vs the row's best ===")
         print(rel.apply(fmt, axis=1).to_string(), "\n")
 
-    # Absolute magnitude on one workload -- the a3i << kd_agg << adkd_agg ordering.
+    # Absolute magnitude on one workload -- the a3i << kd_agg << akd_agg ordering.
     t = df[df.workload == "taxi_random"]
     if len(t):
         print("=== absolute total_reads (millions), taxi_random ===")
-        for meth, sub in [("a3i (eb=0.05)", t[(t.method == "a3i") & (t.eb == 0.05)]),
-                          ("a3i (eb=0.01)", t[(t.method == "a3i") & (t.eb == 0.01)]),
+        for meth, sub in [("a3i_akd (eb=0.05)", t[(t.method == "a3i_akd") & (t.eb == 0.05)]),
+                          ("a3i_akd (eb=0.01)", t[(t.method == "a3i_akd") & (t.eb == 0.01)]),
                           ("kd_agg", t[t.method == "kd_agg"]),
-                          ("adkd_agg", t[t.method == "adkd_agg"])]:
+                          ("akd_agg", t[t.method == "akd_agg"])]:
             if len(sub):
                 s = sub.set_index("partition_size")["total_reads"].sort_index()
                 print(f"  {meth:14}", {int(k): round(v / 1e6, 1) for k, v in s.items()})

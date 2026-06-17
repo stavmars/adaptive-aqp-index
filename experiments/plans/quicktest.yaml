@@ -3,7 +3,7 @@
 # One run, queries capped — a correctness + expected-behaviour check across
 # datasets, not a full sweep. Raise max_queries / add run_ids once it looks good.
 plan_id: quicktest
-runs: [scan, a3i, kd, kd_agg, adkd, adkd_agg, adkd_sampling]
+runs: [scan, a3i_akd, kd, kd_agg, akd, akd_agg, akd_sampling]
 workloads:
   - taxi_clustered
   - taxi_random

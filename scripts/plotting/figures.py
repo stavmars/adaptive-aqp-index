@@ -30,7 +30,7 @@ class Figure:
 
 
 # Approximate run ids (the ones with error bounds / coverage).
-APPROX = ("a3i", "adkd_sampling")
+APPROX = ("a3i_akd", "akd_sampling")
 
 # Default values the comparison figures pin the within-facet, non-method axes to:
 # a method comparison must hold every axis but the method fixed, so it picks one

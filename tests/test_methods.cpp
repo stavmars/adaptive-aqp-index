@@ -189,9 +189,9 @@ TEST(Methods, ResolvedFlagsAreSubstrateDerived) {
     adaptive.prepare(t1);
     stat.prepare(t2);
 
-    const auto adkd_agg = ResolvedRunConfig::resolve(behavior_config(Behavior::Agg), adaptive);
-    EXPECT_TRUE(adkd_agg.allow_refine);
-    EXPECT_FALSE(adkd_agg.eager_materialize);  // lazy: the tree is not pre-built
+    const auto akd_agg = ResolvedRunConfig::resolve(behavior_config(Behavior::Agg), adaptive);
+    EXPECT_TRUE(akd_agg.allow_refine);
+    EXPECT_FALSE(akd_agg.eager_materialize);  // lazy: the tree is not pre-built
 
     const auto kd_agg = ResolvedRunConfig::resolve(behavior_config(Behavior::Agg), stat);
     EXPECT_FALSE(kd_agg.allow_refine);
@@ -226,7 +226,7 @@ TEST(Methods, AggReusesContainedPartitionAdkdReReads) {
     Fixture f;
     const RangeQuery q = query(0.0, 4.0, 0.0, 4.0, /*rel=*/0.0);
 
-    // adkd_agg: persists the exact summary of the isolated contained partition.
+    // akd_agg: persists the exact summary of the isolated contained partition.
     {
         IndexTable table = f.make_table();
         AdaptiveKdAccessPath path(f.substrate());
@@ -240,7 +240,7 @@ TEST(Methods, AggReusesContainedPartitionAdkdReReads) {
         expect_matches_oracle(second, oracle);
     }
 
-    // adkd: no persistence, so the second run re-reads.
+    // akd: no persistence, so the second run re-reads.
     {
         IndexTable table = f.make_table();
         AdaptiveKdAccessPath path(f.substrate());

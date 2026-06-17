@@ -65,7 +65,7 @@ def write_plan_tree(work: Path, dataset_id: str) -> tuple[Path, Path]:
     plans = work / "plans"
     plans.mkdir()
     (plans / "_defaults.yaml").write_text(
-        "runs: [scan, kd, kd_agg, a3i]\n"
+        "runs: [scan, kd, kd_agg, a3i_akd]\n"
         f"workloads: [{dataset_id}_clustered]\n"
         "nm: [1, 2]\n"
         "eb: [0.05]\n"
@@ -114,7 +114,7 @@ def assert_paths_and_idempotency(work: Path, prepared: Path, plans: Path,
     # The exact ladder lands under its substrate; a3i under adaptive_kd.
     scan = list((results / dataset_id / wl / "n_a" / "scan").glob("qresults_*.csv"))
     kd = list((results / dataset_id / wl / "static_kd" / "kd").glob("qresults_*.csv"))
-    a3i = list((results / dataset_id / wl / "adaptive_kd" / "a3i").glob("qresults_*.csv"))
+    a3i = list((results / dataset_id / wl / "adaptive_kd" / "a3i_akd").glob("qresults_*.csv"))
     assert scan, "missing scan oracle"
     assert kd, "missing kd run"
     assert a3i, "missing a3i run"
@@ -166,8 +166,8 @@ def validate(work: Path, results: Path, dataset_id: str) -> None:
         assert methods[m]["status"] == "pass", methods[m]
         assert int(methods[m]["exact_checked"]) > 0, methods[m]
     # a3i ran approximate aggregates that were scored (coverage recorded).
-    assert "a3i" in methods, list(methods)
-    assert methods["a3i"]["status"] == "pass", methods["a3i"]
+    assert "a3i_akd" in methods, list(methods)
+    assert methods["a3i_akd"]["status"] == "pass", methods["a3i_akd"]
     # Build-inclusive cost columns: cumulative = init + query time, all present
     # and self-consistent for every method.
     for m, r in methods.items():

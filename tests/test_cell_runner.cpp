@@ -257,7 +257,7 @@ TEST(CellRunner, ScanAndExactSubstrateAgree) {
 
 TEST(CellRunner, RunmetaRecordsResolvedConfig) {
     Fixture fx;
-    auto cfg        = fx.config("a3i", 1);
+    auto cfg        = fx.config("a3i_akd", 1);
     cfg.error_bound = 0.05;
     cfg.run_id      = 3;
     const auto rep  = run_cell(cfg);
@@ -265,7 +265,7 @@ TEST(CellRunner, RunmetaRecordsResolvedConfig) {
     std::ifstream in(rep.runmeta_path);
     nlohmann::json meta;
     in >> meta;
-    EXPECT_EQ(meta["method"], "a3i");
+    EXPECT_EQ(meta["method"], "a3i_akd");
     EXPECT_EQ(meta["substrate"], "adaptive_kd");
     EXPECT_EQ(meta["num_measures"], 1);
     EXPECT_EQ(meta["run_id"], 3);
@@ -291,12 +291,12 @@ TEST(CellRunner, MethodCatalogIsSingleSourceOfTruth) {
     EXPECT_EQ(by_name.at("scan").substrate, "n/a");
     EXPECT_FALSE(by_name.at("scan").approx);
     EXPECT_EQ(by_name.at("kd").substrate, "static_kd");
-    EXPECT_EQ(by_name.at("a3i").substrate, "adaptive_kd");
+    EXPECT_EQ(by_name.at("a3i_akd").substrate, "adaptive_kd");
 
     std::map<std::string, bool> expected_approx = {
         {"scan", false}, {"kd", false}, {"kd_agg", false},
-        {"adkd", false}, {"adkd_agg", false}, {"adkd_sampling", true},
-        {"a3i", true},
+        {"akd", false}, {"akd_agg", false}, {"akd_sampling", true},
+        {"a3i_akd", true},
     };
     ASSERT_EQ(by_name.size(), expected_approx.size());
     for (const auto& [name, approx] : expected_approx) {

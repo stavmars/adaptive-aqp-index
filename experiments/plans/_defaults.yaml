@@ -7,7 +7,7 @@
 #   workloads   workload ids from configs/workloads/*.yaml (selectivity is in the id)
 #   nm          number of measures served (first-k of the schema order); values
 #               exceeding a dataset's measure count are pruned per dataset
-#   eb          error bound; applied to APPROXIMATE runs only (a3i, adkd_sampling)
+#   eb          error bound; applied to APPROXIMATE runs only (a3i_akd, akd_sampling)
 #   partition_size  maximum rows per partition (e.g the leaf size in kd tree, or the cracking threshold in an adaptive substrate)
 #   mem         memory setting per run: unbounded (mmap, no cap), inmem (measure
 #               columns loaded fully resident, no cap), or a cap like 16GiB (mmap
@@ -19,7 +19,7 @@
 #   max_queries cap on queries replayed (null = full sequence)
 #   confidence  CI confidence level (applies to approximate runs)
 
-runs: [scan, kd, kd_agg, adkd, adkd_agg, adkd_sampling, a3i]
+runs: [scan, kd, kd_agg, akd, akd_agg, akd_sampling, a3i_akd]
 
 workloads:
   - taxi_random
@@ -30,7 +30,6 @@ workloads:
   - ebird_us_clustered
   - synth10_300M_random
   - synth10_300M_clustered
-
 nm: [4]
 eb: [0.01]
 partition_size: [1024]
@@ -40,5 +39,6 @@ run_id_by_method:
   scan:   [0]         
   kd:     [0]
   kd_agg: [0]
+  a3i_akd:    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 max_queries: null
 confidence: 0.95

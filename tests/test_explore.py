@@ -50,7 +50,7 @@ def _frame(specs):
 
 
 SCAN = dict(method="scan", substrate="n_a", nm=4, eb=float("nan"), exact=True)
-A3I = dict(method="a3i", substrate="adaptive_kd", nm=4, eb=0.01, exact=False)
+A3I = dict(method="a3i_akd", substrate="adaptive_kd", nm=4, eb=0.01, exact=False)
 
 
 @unittest.skipUnless(_HAVE_DEPS, "pandas/matplotlib not available")

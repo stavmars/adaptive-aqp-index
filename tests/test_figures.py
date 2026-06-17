@@ -52,8 +52,8 @@ def _frame(*chunks):
 
 
 SCAN = dict(method="scan", substrate="n_a", exact=True, eb=float("nan"))
-A3I = dict(method="a3i", substrate="adaptive_kd", exact=False, eb=0.01)
-ADKD = dict(method="adkd", substrate="adaptive_kd", exact=True, eb=float("nan"))
+A3I = dict(method="a3i_akd", substrate="adaptive_kd", exact=False, eb=0.01)
+ADKD = dict(method="akd", substrate="adaptive_kd", exact=True, eb=float("nan"))
 
 
 @unittest.skipUnless(_HAVE_DEPS, "pandas/matplotlib not available")
@@ -106,7 +106,7 @@ class Figures(unittest.TestCase):
         # row is excluded from relative statistics, not scored absolutely).
         def one(method, measure, est, exact):
             row = dict(dataset="d", workload="w", method=method,
-                       substrate="adaptive_kd" if method == "a3i" else "n_a",
+                       substrate="adaptive_kd" if method == "a3i_akd" else "n_a",
                        nm=4, mem="inmem", partition_size=1024, n=1, eb=0.01, run_id=0,
                        query_ordinal=0, aggregate="AVG", measure=measure,
                        estimate=est, ci_low=est, ci_high=est, exact=exact,
@@ -117,10 +117,10 @@ class Figures(unittest.TestCase):
             return row
         frame = pd.DataFrame([
             one("scan", "small", 0.2, True), one("scan", "zero", 0.0, True),
-            one("a3i", "small", 0.3, False), one("a3i", "zero", 0.1, False)])
+            one("a3i_akd", "small", 0.3, False), one("a3i_akd", "zero", 0.1, False)])
         m = aggregate.with_error(frame).set_index(["method", "measure"])
-        self.assertAlmostEqual(m.loc[("a3i", "small"), "error"], 0.5)
-        self.assertTrue(pd.isna(m.loc[("a3i", "zero"), "error"]))
+        self.assertAlmostEqual(m.loc[("a3i_akd", "small"), "error"], 0.5)
+        self.assertTrue(pd.isna(m.loc[("a3i_akd", "zero"), "error"]))
 
     def test_missing_cells_skip_then_strict(self):
         # single nm -> effect_of_nm has no sweep to draw.

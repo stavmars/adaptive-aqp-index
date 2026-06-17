@@ -86,10 +86,10 @@ const MethodEntry kMethods[] = {
     {"scan",          true,  "",            Behavior::Plain},
     {"kd",            false, "static_kd",   Behavior::Plain},
     {"kd_agg",        false, "static_kd",   Behavior::Agg},
-    {"adkd",          false, "adaptive_kd", Behavior::Plain},
-    {"adkd_agg",      false, "adaptive_kd", Behavior::Agg},
-    {"adkd_sampling", false, "adaptive_kd", Behavior::Sampling},
-    {"a3i",           false, "adaptive_kd", Behavior::A3i},
+    {"akd",          false, "adaptive_kd", Behavior::Plain},
+    {"akd_agg",      false, "adaptive_kd", Behavior::Agg},
+    {"akd_sampling", false, "adaptive_kd", Behavior::Sampling},
+    {"a3i_akd",           false, "adaptive_kd", Behavior::A3i},
 };
 
 // The label written to the `substrate` column / results path.

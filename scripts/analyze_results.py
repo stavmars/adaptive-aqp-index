@@ -57,10 +57,10 @@ def diagnostics(sub, eb, nominal, dataset) -> list[dict]:
             f"max method reads {worst:,.0f} vs scan {g('scan','total_reads'):,.0f}")
     # The exact, non-aggregated methods must read exactly the qualifying values,
     # so their read counts coincide (the read-side of exact==scan).
-    exact_full = [m for m in ("scan", "kd", "adkd") if _row(sub, m) is not None]
+    exact_full = [m for m in ("scan", "kd", "akd") if _row(sub, m) is not None]
     if len(exact_full) >= 2:
         vals = {m: g(m, "total_reads") for m in exact_full}
-        add("scan = kd = adkd (exact reads)",
+        add("scan = kd = akd (exact reads)",
             max(vals.values()) - min(vals.values()) <= 2,
             ", ".join(f"{m}={v:,.0f}" for m, v in vals.items()))
     if have("kd", "kd_agg"):
@@ -70,61 +70,61 @@ def diagnostics(sub, eb, nominal, dataset) -> list[dict]:
             g("kd_agg", "total_reads") < 0.9 * g("kd", "total_reads"),
             f"{g('kd_agg','total_reads'):,.0f} vs {g('kd','total_reads'):,.0f}",
             severity="WARN")
-    if have("adkd", "adkd_agg"):
-        add("adkd_agg <= adkd (reuse)",
-            g("adkd_agg", "total_reads") <= g("adkd", "total_reads"),
-            f"{g('adkd_agg','total_reads'):,.0f} vs {g('adkd','total_reads'):,.0f}")
+    if have("akd", "akd_agg"):
+        add("akd_agg <= akd (reuse)",
+            g("akd_agg", "total_reads") <= g("akd", "total_reads"),
+            f"{g('akd_agg','total_reads'):,.0f} vs {g('akd','total_reads'):,.0f}")
     # Sampling methods draw a subset of the qualifying rows, so they never read
-    # more than the exact full-read methods (scan = kd = adkd).
-    full_reads = next((g(m, "total_reads") for m in ("kd", "adkd", "scan")
+    # more than the exact full-read methods (scan = kd = akd).
+    full_reads = next((g(m, "total_reads") for m in ("kd", "akd", "scan")
                        if _row(sub, m) is not None), None)
     if full_reads is not None:
-        for m in ("a3i", "adkd_sampling"):
+        for m in ("a3i_akd", "akd_sampling"):
             if _row(sub, m) is not None:
                 add(f"{m} <= exact reads (sample within population)",
                     g(m, "total_reads") <= full_reads + 2,
                     f"{g(m,'total_reads'):,.0f} vs full {full_reads:,.0f}")
     # a3i vs the lazy-aggregate method on reads: a soft expectation that holds in
-    # practice (a3i samples; adkd_agg reads the rows of not-yet-summarised
+    # practice (a3i samples; akd_agg reads the rows of not-yet-summarised
     # partitions). Not asserted against kd_agg, which materialises every summary
     # via a full up-front build -- on low-selectivity / multi-measure cells a3i
     # routinely reads more, so there is no expected order; a3i's win over the
     # eager methods is in total time (below), not reads.
-    if have("a3i", "adkd_agg"):
-        add("a3i <= adkd_agg (reads)",
-            g("a3i", "total_reads") <= g("adkd_agg", "total_reads"),
-            f"{g('a3i','total_reads'):,.0f} vs {g('adkd_agg','total_reads'):,.0f}",
+    if have("a3i_akd", "akd_agg"):
+        add("a3i_akd <= akd_agg (reads)",
+            g("a3i_akd", "total_reads") <= g("akd_agg", "total_reads"),
+            f"{g('a3i_akd','total_reads'):,.0f} vs {g('akd_agg','total_reads'):,.0f}",
             severity="WARN")
-    if have("a3i", "adkd_sampling"):
+    if have("a3i_akd", "akd_sampling"):
         # Reuse helps on overlapping workloads; on a non-overlapping (random) one
         # the two sampling paths can tie or a3i can read marginally more, so this
         # is a soft expectation, not a strict invariant.
-        add("a3i <= adkd_sampling (reuse)",
-            g("a3i", "total_reads") <= g("adkd_sampling", "total_reads") * 1.05,
-            f"{g('a3i','total_reads'):,.0f} vs {g('adkd_sampling','total_reads'):,.0f}",
+        add("a3i_akd <= akd_sampling (reuse)",
+            g("a3i_akd", "total_reads") <= g("akd_sampling", "total_reads") * 1.05,
+            f"{g('a3i_akd','total_reads'):,.0f} vs {g('akd_sampling','total_reads'):,.0f}",
             severity="WARN")
 
     # --- total time (init-inclusive cum_ms; the headline AQP claim) ----------
     # a3i must beat a full scan end-to-end -- the premise of doing AQP at all.
-    if have("a3i", "scan"):
-        add("a3i beats scan", g("a3i", "cum_ms") < g("scan", "cum_ms"),
-            f"{g('a3i','cum_ms')/1e3:.1f}s vs {g('scan','cum_ms')/1e3:.1f}s "
-            f"({g('scan','cum_ms')/g('a3i','cum_ms'):.0f}x)")
+    if have("a3i_akd", "scan"):
+        add("a3i_akd beats scan", g("a3i_akd", "cum_ms") < g("scan", "cum_ms"),
+            f"{g('a3i_akd','cum_ms')/1e3:.1f}s vs {g('scan','cum_ms')/1e3:.1f}s "
+            f"({g('scan','cum_ms')/g('a3i_akd','cum_ms'):.0f}x)")
     # a3i should also be the fastest end-to-end among the index methods: its value
     # is total time at a bounded error, where the eager methods' build cost tells.
     # Soft (WARN), not an invariant -- a very large query count amortises a
     # one-time build, so a cheap-per-query method could in principle catch up.
-    # Subsumes the old a3i <= adkd_agg <= adkd ladder and adds kd / kd_agg.
-    a3i_cum = g("a3i", "cum_ms")
+    # Subsumes the old a3i <= akd_agg <= akd ladder and adds kd / kd_agg.
+    a3i_cum = g("a3i_akd", "cum_ms")
     others = {m: g(m, "cum_ms") for m in
-              ("kd", "kd_agg", "adkd", "adkd_agg", "adkd_sampling")
+              ("kd", "kd_agg", "akd", "akd_agg", "akd_sampling")
               if _row(sub, m) is not None}
     if a3i_cum is not None and others:
         faster = {m: v for m, v in others.items() if v < a3i_cum}
-        add("a3i lowest total time", not faster,
-            (f"a3i {a3i_cum/1e3:.1f}s; faster: "
+        add("a3i_akd lowest total time", not faster,
+            (f"a3i_akd {a3i_cum/1e3:.1f}s; faster: "
              + ", ".join(f"{m} {v/1e3:.1f}s" for m, v in faster.items())) if faster
-            else f"a3i {a3i_cum/1e3:.1f}s <= all "
+            else f"a3i_akd {a3i_cum/1e3:.1f}s <= all "
                  f"(next {min(others.values())/1e3:.1f}s)",
             severity="WARN")
 
@@ -132,9 +132,9 @@ def diagnostics(sub, eb, nominal, dataset) -> list[dict]:
     if have("kd_agg"):
         add("kd_agg has build init", g("kd_agg", "init_ms") > 0,
             f"{g('kd_agg','init_ms')/1e3:.1f}s", severity="WARN")
-    if have("a3i"):
-        add("a3i ~no init", g("a3i", "init_ms") < 100,
-            f"{g('a3i','init_ms'):.0f}ms", severity="WARN")
+    if have("a3i_akd"):
+        add("a3i_akd ~no init", g("a3i_akd", "init_ms") < 100,
+            f"{g('a3i_akd','init_ms'):.0f}ms", severity="WARN")
 
     # Answer correctness, error-vs-bound, and CI coverage are deliberately NOT
     # judged here. They are owned by validate_results.py, which checks them
@@ -178,7 +178,7 @@ def main() -> int:
     # once per (slice, eb) -- every error bound present is checked, no --eb needed
     # (pass --eb only to restrict to one).
     slice_keys = ["dataset", "workload", "nm", "mem", "partition_size", "n"]
-    order = ["scan", "kd", "kd_agg", "adkd", "adkd_agg", "adkd_sampling", "a3i"]
+    order = ["scan", "kd", "kd_agg", "akd", "akd_agg", "akd_sampling", "a3i_akd"]
 
     if args.eb is not None:
         ebs = [args.eb]
@@ -207,7 +207,7 @@ def main() -> int:
             ds, wl, nm, mem, psize, n = keys
             # An eb context is only meaningful where an approximate method ran at
             # it; an exact-only slice is already covered under its own eb.
-            if not grp["method"].isin(("a3i", "adkd_sampling")).any():
+            if not grp["method"].isin(("a3i_akd", "akd_sampling")).any():
                 continue
             sub = grp.set_index("method").reindex(
                 [m for m in order if m in grp["method"].values]).reset_index()
@@ -262,7 +262,7 @@ def main() -> int:
     # budget give-up that reads a residual whole). Reads also depend on the
     # adaptive session (cracking/reuse) and the draw seed, so it is a warning,
     # not an invariant. Compared across eb, so it runs once here, not per slice.
-    approx = summary[summary["method"].isin(("a3i", "adkd_sampling"))
+    approx = summary[summary["method"].isin(("a3i_akd", "akd_sampling"))
                      & summary["eb"].notna()]
     for keys, grp in approx.groupby(slice_keys + ["method"], dropna=False):
         g = grp.sort_values("eb")  # ascending eb = tighter -> looser

@@ -35,23 +35,26 @@ PALETTE = {
 }
 
 # One fixed identity per run id, reused across every figure. Unknown run ids
-# (e.g. external baselines) fall through to `_FALLBACK_STYLE`.
+# (e.g. external baselines) fall through to `_FALLBACK_STYLE`. Add a "label" key
+# to any entry to override the name shown in legends/axes (the code keeps the
+# canonical token). Defaults to the token.
 _METHOD_STYLE = {
-    "scan":          {"color": PALETTE["black"],     "marker": "o", "linestyle": "-"},
-    "kd":            {"color": PALETTE["skyblue"],    "marker": "s", "linestyle": "--"},
-    "kd_agg":        {"color": PALETTE["blue"],       "marker": "D", "linestyle": "--"},
-    "adkd":          {"color": PALETTE["orange"],     "marker": "^", "linestyle": "-."},
-    "adkd_agg":      {"color": PALETTE["vermilion"],  "marker": "v", "linestyle": "-."},
-    "adkd_sampling": {"color": PALETTE["green"],      "marker": "P", "linestyle": ":"},
-    "a3i":           {"color": PALETTE["purple"],     "marker": "*", "linestyle": "-"},
+    "scan":         {"color": PALETTE["black"],     "marker": "o", "linestyle": "-"},
+    "kd":           {"color": PALETTE["skyblue"],   "marker": "s", "linestyle": "--"},
+    "kd_agg":       {"color": PALETTE["blue"],      "marker": "D", "linestyle": "--"},
+    "akd":          {"color": PALETTE["orange"],    "marker": "^", "linestyle": "-."},
+    "akd_agg":      {"color": PALETTE["vermilion"], "marker": "v", "linestyle": "-."},
+    "akd_sampling": {"color": PALETTE["green"],     "marker": "P", "linestyle": ":"},
+    "a3i_akd":      {"color": PALETTE["purple"],    "marker": "*", "linestyle": "-"},
 }
 _FALLBACK_STYLE = {"color": PALETTE["yellow"], "marker": "x", "linestyle": "-"}
 
 
 def method_style(method: str) -> dict:
-    """Fixed color/marker/linestyle/label for a run id (unknown -> a fallback)."""
+    """Fixed color/marker/linestyle/label for a run id (unknown -> a fallback).
+    An entry's optional "label" overrides the display name; else the token."""
     base = _METHOD_STYLE.get(method, _FALLBACK_STYLE)
-    return {**base, "label": method}
+    return {"label": method, **base}
 
 
 _RCPARAMS = {

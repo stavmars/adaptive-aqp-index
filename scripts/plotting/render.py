@@ -148,7 +148,8 @@ def bar(summary, *, metric, title=None, width="single", ylabel=None, logy=False)
     s = summary.dropna(subset=[metric]).sort_values(metric)
     fig, ax = plt.subplots(figsize=style.figure_size(width))
     colors = [style.method_style(m)["color"] for m in s["method"]]
-    ax.bar(s["method"].astype(str), s[metric], color=colors)
+    labels = [style.method_style(m)["label"] for m in s["method"]]
+    ax.bar(labels, s[metric], color=colors)
     applied_log = logy and (s[metric] > 0).all()
     if applied_log:
         ax.set_yscale("log")
@@ -168,7 +169,7 @@ def grouped_bar(summary, *, metrics, title=None, width="single", ylabel=None,
 
     style.apply()
     s = summary.copy()
-    methods = [str(m) for m in s["method"]]
+    methods = [style.method_style(m)["label"] for m in s["method"]]
     x = np.arange(len(methods))
     bar_w = 0.8 / max(1, len(metrics))
     fig, ax = plt.subplots(figsize=style.figure_size(width))

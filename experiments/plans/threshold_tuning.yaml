@@ -1,5 +1,5 @@
 plan_id: threshold_tuning
-runs: [a3i, kd_agg, adkd_agg, scan]
+runs: [a3i_akd, kd_agg, akd_agg, scan]
 workloads:
   - taxi_clustered
   - taxi_random
@@ -12,5 +12,5 @@ eb: [0.01, 0.05]
 mem: [inmem]
 run_id_by_method:
   kd_agg: [0, 1, 2]
-  adkd_agg: [0, 1, 2]
-  a3i:    [0, 1, 2, 3, 4]
+  akd_agg: [0, 1, 2]
+  a3i_akd:    [0, 1, 2, 3, 4]

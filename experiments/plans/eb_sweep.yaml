@@ -1,5 +1,5 @@
 # Error-bound sweep: vary eb over the full set at a single measure. Exact runs
-# emit once (they ignore eb); the approximate runs (a3i, adkd_sampling) are
+# emit once (they ignore eb); the approximate runs (a3i_akd, akd_sampling) are
 # produced at every eb. Accuracy-vs-cost trade-off figures use these cells.
 plan_id: eb_sweep
 eb: [0.01, 0.02, 0.05, 0.10]

@@ -4,7 +4,7 @@
 # the on-disk setting. A single mem cap likely suffices: a tighter one streams the same measures the same way (page cache
 # barely helps the scattered per-query reads). Enforced by the cgroup launcher.
 plan_id: mem_constrained
-runs: [a3i, kd, kd_agg, scan, adkd, adkd_agg, adkd_sampling]
+runs: [a3i_akd, kd, kd_agg, scan, akd, akd_agg, akd_sampling]
 workloads:
   - taxi_clustered
   - taxi_random
