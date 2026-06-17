@@ -87,22 +87,18 @@ public:
     /// The partition's refinement parent, or nullopt for a root.
     virtual std::optional<PartitionId> parent(PartitionId id) const = 0;
 
-    /// True iff active partitions' positions are in ascending RowId order,
-    /// which lets the read-path cursor skip its sort. False for substrates
-    /// whose build/split permutes rows (the KD substrates).
-    virtual bool ranges_are_row_id_ordered() const = 0;
-
     /// True iff `refine()` can grow the structure under queries (a cracking
-    /// substrate). False for a fully-built structure whose `refine()` is a
-    /// no-op. The engine consults this to decide whether to crack or merely
-    /// locate, so the read path stays substrate-agnostic.
+    /// substrate). False for a structure whose `refine()` is a no-op. The
+    /// engine consults this to decide whether to crack or merely locate, so the
+    /// read path stays substrate-agnostic.
     virtual bool supports_refine() const = 0;
 
-    /// True iff the whole structure is materialized up front by `ensure_built()`
-    /// with a stable, query-independent partitioning. False when partitions are
-    /// created lazily by queries. Only a fully-built structure can have every
-    /// node's summary precomputed at initialization.
-    virtual bool is_fully_built() const = 0;
+    /// True iff `ensure_built()` produces the working set of partitions up front
+    /// (a real partitioning), as opposed to a single root that queries
+    /// subdivide. This is the condition under which every partition's summary
+    /// can be precomputed at initialization; it is independent of whether those
+    /// partitions later refine (see `supports_refine()`).
+    virtual bool has_prebuilt_partitions() const = 0;
 };
 
 }  // namespace a3i

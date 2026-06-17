@@ -36,8 +36,8 @@ struct ResolvedRunConfig {
     AdaptiveAccessPath* substrate = nullptr;
     /// = substrate->supports_refine(): may the structure be cracked per query.
     bool allow_refine = false;
-    /// = persist_summaries && substrate->is_fully_built(): may every node's
-    /// summary be precomputed at initialization (only on a fully-built tree).
+    /// = persist_summaries && substrate->has_prebuilt_partitions(): may every
+    /// partition's summary be precomputed at initialization.
     bool eager_materialize = false;
 
     static ResolvedRunConfig resolve(EngineConfig behavior,

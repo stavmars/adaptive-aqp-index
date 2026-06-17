@@ -7,6 +7,7 @@
 #include "a3i/aqp/decompose.hpp"
 #include "a3i/aqp/eager_materialize.hpp"
 #include "a3i/aqp/stratum_cursor.hpp"
+#include "a3i/engine/method.hpp"
 #include "a3i/storage/manifest.hpp"
 #include "a3i/util/rng.hpp"
 
@@ -34,6 +35,13 @@ QueryEngine::QueryEngine(const BinaryColumnStore& store, IndexTable& table,
       measure_count_(store.measure_count()),
       estimator_(),
       allocator_(config.allocator) {
+    // Resolve the behavior-and-substrate derived flags once: whether the
+    // descent may crack partitions and whether summaries are precomputed up
+    // front. Both follow from the substrate's capabilities and the behavior.
+    const ResolvedRunConfig rr = ResolvedRunConfig::resolve(config_, access_path_);
+    allow_refine_      = rr.allow_refine;
+    eager_materialize_ = rr.eager_materialize;
+
     // The largest absolute per-measure global mean scales the magnitude
     // floors of the relative-half-width checks and variance budgets.
     for (MeasureId mid = 0; mid < measure_count_; ++mid) {
@@ -48,10 +56,10 @@ QueryEngine::QueryEngine(const BinaryColumnStore& store, IndexTable& table,
 void QueryEngine::initialize() {
     if (initialized_) return;
     access_path_.ensure_built();
-    // Eager materialization applies only to a summary-keeping behavior over a
-    // fully-built, stable substrate; on a cracking substrate the partitions are
-    // created by queries, so summaries can only be filled lazily on first touch.
-    if (config_.persist_summaries && access_path_.is_fully_built()) {
+    // Eager materialization applies when summaries persist and the substrate
+    // prebuilds its partitions; otherwise summaries are filled lazily on first
+    // touch as queries reach each partition.
+    if (eager_materialize_) {
         materialize_all_summaries(access_path_, table_, store_, state_,
                                   measure_count_);
     }
@@ -358,7 +366,7 @@ QueryResult QueryEngine::execute(const RangeQuery& query,
     // partitioning; the descent owns the state-store decisions.
     DecompositionResult d = decompose_descent(
         query.predicate, access_path_, state_, table_, measure_count_,
-        config_.persist_summaries, access_path_.supports_refine());
+        config_.persist_summaries, allow_refine_);
     m.partitions_refined = d.partitions_refined;
     m.frontier_partitions = d.frontier_partitions;
     m.exact_contributors = d.exact_contributor_partitions;

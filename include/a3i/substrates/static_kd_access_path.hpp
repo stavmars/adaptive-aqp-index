@@ -10,10 +10,6 @@
 // refine() is a genuine no-op: the structure never adapts. It returns an
 // empty retired-parent list and leaves the table untouched; the engine
 // descends the already-built children() instead.
-//
-// The median value partition is unstable, so ranges_are_row_id_ordered() is
-// false and the read path sorts per stratum, exactly as for the adaptive
-// substrate.
 
 #pragma once
 
@@ -44,9 +40,8 @@ public:
     PartitionView partition(PartitionId id) const override;
     std::vector<PartitionId> active_partitions() const override;
     std::optional<PartitionId> parent(PartitionId id) const override;
-    bool ranges_are_row_id_ordered() const override { return false; }
     bool supports_refine() const override { return false; }
-    bool is_fully_built() const override { return true; }
+    bool has_prebuilt_partitions() const override { return true; }
 
 private:
     // Recursively split node `id` on `axis` at its median value, cycling the

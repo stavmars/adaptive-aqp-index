@@ -226,9 +226,4 @@ TEST(StaticKd, RefineWrongTableThrows) {
                  std::invalid_argument);
 }
 
-TEST(StaticKd, RangesNotRowIdOrdered) {
-    StaticKdAccessPath path(config(/*partition_size=*/16));
-    EXPECT_FALSE(path.ranges_are_row_id_ordered());
-}
-
 }  // namespace

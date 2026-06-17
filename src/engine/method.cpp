@@ -43,7 +43,7 @@ ResolvedRunConfig ResolvedRunConfig::resolve(EngineConfig behavior,
     rr.behavior          = behavior;
     rr.substrate         = &substrate;
     rr.allow_refine      = substrate.supports_refine();
-    rr.eager_materialize = behavior.persist_summaries && substrate.is_fully_built();
+    rr.eager_materialize = behavior.persist_summaries && substrate.has_prebuilt_partitions();
     return rr;
 }
 

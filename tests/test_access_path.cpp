@@ -129,11 +129,6 @@ TEST(AdaptiveKdAccessPath, RefineRetiresNothing) {
     EXPECT_EQ(path.active_partitions().size(), 1u);
 }
 
-TEST(AdaptiveKdAccessPath, RangesNotRowIdOrdered) {
-    AdaptiveKdAccessPath path(config());
-    EXPECT_FALSE(path.ranges_are_row_id_ordered());
-}
-
 TEST(AdaptiveKdAccessPath, PartitionInvariantsHold) {
     IndexTable table = make_table();
     AdaptiveKdAccessPath path(config());

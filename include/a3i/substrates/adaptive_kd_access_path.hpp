@@ -6,8 +6,8 @@
 // isolating the query rectangle so that later queries over the same region
 // reuse fully-contained children.
 //
-// Positions are permuted by cracking (an unstable in-place partition), so
-// ranges_are_row_id_ordered() is false: the read path sorts per stratum.
+// Positions are permuted by cracking (an unstable in-place partition), so the
+// read path sorts per stratum.
 
 #pragma once
 
@@ -38,9 +38,8 @@ public:
     PartitionView partition(PartitionId id) const override;
     std::vector<PartitionId> active_partitions() const override;
     std::optional<PartitionId> parent(PartitionId id) const override;
-    bool ranges_are_row_id_ordered() const override { return false; }
     bool supports_refine() const override { return true; }
-    bool is_fully_built() const override { return false; }
+    bool has_prebuilt_partitions() const override { return false; }
 
 private:
     // Isolate q from one boundary leaf: crack at each axis lower bound
