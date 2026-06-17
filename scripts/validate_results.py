@@ -393,7 +393,8 @@ def validate_run(csv_path: Path, oracles: dict[int, Oracle],
                                 "estimate": est, "oracle": o, "rel_err": rel,
                                 "covered": cov})
                 approx_recs.append({"ordinal": ordinal, "aggregate": k[0],
-                                    "measure": k[1], "covered": bool(cov)})
+                                    "measure": k[1], "covered": bool(cov),
+                                    "within": bool(within)})
 
         # Gate: an exact/exactified status implies every aggregate read in full.
         if status in EXACT_VALUED_STATUS and not row_all_exact:
@@ -533,8 +534,8 @@ SUMMARY_COLS = ["dataset", "workload", "method", "substrate", "num_measures",
 COVERAGE_COLS = ["dataset", "workload", "method", "substrate", "num_measures",
                  "sort_gather_by_row_id", "measure_storage", "partition_size",
                  "error_bound", "confidence", "aggregate", "measure", "n_runs",
-                 "mean_coverage", "coverage_upper", "coverage_status",
-                 "zero_coverage_positions", "basis"]
+                 "mean_within_eb", "mean_coverage", "coverage_upper",
+                 "coverage_status", "zero_coverage_positions", "basis"]
 DETAIL_COLS = ["query_ordinal", "aggregate", "measure", "kind", "ok",
                "estimate", "oracle", "rel_err", "covered", "note"]
 
@@ -604,6 +605,7 @@ def main() -> int:
                          f"across replicate runs ({sorted(gather_orders)}); "
                          f"these results cannot be pooled")
             per_run_ma: list[dict[tuple[str, str], list[int]]] = []
+            per_run_within: list[dict[tuple[str, str], list[int]]] = []
             positions: dict[tuple[str, str], dict[int, list[bool]]] = defaultdict(
                 lambda: defaultdict(list))
             cell_meta: dict | None = None
@@ -621,12 +623,17 @@ def main() -> int:
                           f"guard_failed={summary['guard_failed']})", file=sys.stderr)
                 ma_counts: dict[tuple[str, str], list[int]] = defaultdict(
                     lambda: [0, 0])
+                ma_within: dict[tuple[str, str], list[int]] = defaultdict(
+                    lambda: [0, 0])
                 for rec in approx:
                     ma = (rec["measure"], rec["aggregate"])
                     ma_counts[ma][0] += int(rec["covered"])
                     ma_counts[ma][1] += 1
+                    ma_within[ma][0] += int(rec["within"])
+                    ma_within[ma][1] += 1
                     positions[ma][rec["ordinal"]].append(bool(rec["covered"]))
                 per_run_ma.append(ma_counts)
+                per_run_within.append(ma_within)
                 cell_meta = summary
 
             if cell_meta is None:
@@ -639,6 +646,14 @@ def main() -> int:
                 runs = [tuple(d[ma]) for d in per_run_ma if ma in d]
                 judged = judge_coverage(runs, positions[ma], nominal,
                                         args.coverage_alpha)
+                # Within-eb fraction per (measure, aggregate), the mean over
+                # runs of each run's share of estimates within the error bound.
+                # Reported beside coverage: within-eb is the looser practical
+                # guarantee (|est-truth|/|truth| <= eb), coverage the stricter
+                # interval calibration; both nominally hold at the confidence.
+                wruns = [d[ma] for d in per_run_within if ma in d]
+                mean_within = (statistics.fmean([w / n for w, n in wruns if n > 0])
+                               if any(n > 0 for _, n in wruns) else "")
                 coverage_rows.append({
                     "dataset": dataset, "workload": workload,
                     "method": cell_meta["method"], "substrate": cell_meta["substrate"],
@@ -647,7 +662,8 @@ def main() -> int:
                     "measure_storage": cell_meta["measure_storage"],
                     "partition_size": cell_meta["partition_size"],
                     "error_bound": cell_meta["error_bound"], "confidence": nominal,
-                    "measure": ma[0], "aggregate": ma[1], **judged})
+                    "measure": ma[0], "aggregate": ma[1],
+                    "mean_within_eb": mean_within, **judged})
                 if judged["coverage_status"] == "low":
                     total_warn += 1
                     escalate = args.strict_coverage and judged["basis"] == "runs_t"
