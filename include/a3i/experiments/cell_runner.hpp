@@ -13,9 +13,9 @@
 //   scan          -> exact-scan oracle (no substrate)
 //   kd            -> static_kd   + plain
 //   kd_agg        -> static_kd   + aggregating
-//   adkd          -> adaptive_kd + plain
-//   adkd_agg      -> adaptive_kd + aggregating
-//   adkd_sampling -> adaptive_kd + sampling
+//   akd          -> adaptive_kd + plain
+//   akd_agg      -> adaptive_kd + aggregating
+//   akd_sampling -> adaptive_kd + sampling
 //   a3i           -> adaptive_kd + accuracy-aware
 //
 // The measure subset (`num_measures`, the first-k of the dataset's measures)

@@ -28,7 +28,7 @@ void print_usage(std::ostream& os) {
 "Methods:\n"
 "  scan           exact-scan oracle (no substrate)\n"
 "  kd | kd_agg | static_kd + plain | aggregating | accuracy-aware\n"
-"  adkd | adkd_agg | adkd_sampling | a3i\n"
+"  akd | akd_agg | akd_sampling | a3i_akd\n"
 "                 adaptive_kd + plain | aggregating | sampling | accuracy-aware\n"
 "\n"
 "  --describe-methods   print the method catalog as JSON and exit\n"

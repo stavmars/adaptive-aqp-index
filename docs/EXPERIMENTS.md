@@ -78,7 +78,7 @@ One row per query, 28 columns. The authoritative header is `kHeader` in
 | # | Column | Meaning |
 |---|--------|---------|
 | 1 | `query_ordinal` | 0-based position of the query within its workload. |
-| 2 | `method` | Run name (e.g. `a3i`, `scan`, `adkd_sampling`). |
+| 2 | `method` | Run name (e.g. `a3i`, `scan`, `akd_sampling`). |
 | 3 | `substrate` | Substrate id (e.g. `adaptive_kd`), or `n/a`/`none` for the scan oracle. |
 | 4 | `dataset` | Dataset label. |
 | 5 | `workload` | Workload label. |
