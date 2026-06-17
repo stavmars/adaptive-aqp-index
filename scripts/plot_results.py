@@ -207,6 +207,9 @@ def main(argv=None) -> int:
                     default=figures.PIN_DEFAULTS["partition_size"],
                     help="partition size the comparison figures pin to "
                          f"(default {figures.PIN_DEFAULTS['partition_size']})")
+    ap.add_argument("--mem", default=figures.PIN_DEFAULTS["mem"],
+                    help="memory mode the comparison figures pin to; in-mem and "
+                         f"capped runs are not comparable (default {figures.PIN_DEFAULTS['mem']})")
     ap.add_argument("--strict", action="store_true",
                     help="fail if a declared figure's required cells are absent")
     ap.add_argument("--per-query-head", type=int, default=None,
@@ -228,6 +231,11 @@ def main(argv=None) -> int:
         a3i_config.results_root(args.results_root),
         datasets=[args.dataset] if args.dataset else None,
         workloads=[args.workload] if args.workload else None)
+
+    # In-mem and memory-capped runs have incomparable absolute costs; the
+    # comparison figures pin to one mode (the cell set keeps both).
+    if "mem" in frame.columns:
+        frame = frame[frame["mem"] == args.mem]
 
     if args.explore:
         # Hold the within-facet axes fixed so a facet varies only on method:
