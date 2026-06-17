@@ -1,0 +1,16 @@
+plan_id: threshold_tuning
+runs: [a3i, kd_agg, adkd_agg, scan]
+workloads:
+  - taxi_clustered
+  - taxi_random
+  - gaia_dr3_clustered
+  - gaia_dr3_random
+  - synth10_300M_clustered
+  - synth10_300M_random
+partition_size: [128, 256, 512, 1024, 2048, 4096]
+eb: [0.01, 0.05]
+mem: [inmem]
+run_id_by_method:
+  kd_agg: [0, 1, 2]
+  adkd_agg: [0, 1, 2]
+  a3i:    [0, 1, 2, 3, 4]
