@@ -11,6 +11,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <span>
 #include <vector>
 
@@ -28,6 +29,18 @@ public:
     /// the store's resident dimension columns).
     static IndexTable from_columns(const std::vector<std::vector<double>>& columns);
     static IndexTable from_columns(std::span<const std::span<const double>> columns);
+
+    /// Build the same interleaved table by streaming the dimension columns in
+    /// row blocks of `chunk_rows`, so no full column is ever held -- only a
+    /// small per-axis chunk. `read_chunk(axis, row_offset, count, out)` fills
+    /// `out[0..count)` with `count` values of column `axis` starting at
+    /// `row_offset`, for each axis in `[0, dimensions)`. `chunk_rows` must be
+    /// positive.
+    static IndexTable from_dimension_reader(
+        DimensionId dimensions, std::size_t n,
+        const std::function<void(DimensionId, std::size_t, std::size_t,
+                                 std::span<double>)>& read_chunk,
+        std::size_t chunk_rows = std::size_t{1} << 20);
 
     /// Low-level constructor. `points` is the interleaved AoS buffer
     /// (length must equal `dimensions * row_ids.size()`); `row_ids`

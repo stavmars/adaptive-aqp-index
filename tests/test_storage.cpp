@@ -74,6 +74,57 @@ TEST(IndexTable, PointReturnsContiguousDimensionBlock) {
     }
 }
 
+TEST(IndexTable, FromDimensionReaderMatchesFromColumns) {
+    // Streaming the columns in blocks must build the same interleaved table.
+    const auto columns = sample_columns_2d();
+    const auto via_columns = IndexTable::from_columns(columns);
+    const auto via_reader = IndexTable::from_dimension_reader(
+        static_cast<DimensionId>(columns.size()), columns[0].size(),
+        [&](DimensionId axis, std::size_t off, std::size_t count,
+            std::span<double> out) {
+            for (std::size_t i = 0; i < count; ++i) out[i] = columns[axis][off + i];
+        });
+
+    ASSERT_EQ(via_reader.size(), via_columns.size());
+    ASSERT_EQ(via_reader.dimensions(), via_columns.dimensions());
+    for (IndexPos pos = 0; pos < via_reader.size(); ++pos) {
+        EXPECT_EQ(via_reader.row_id(pos), via_columns.row_id(pos));
+        for (DimensionId a = 0; a < via_reader.dimensions(); ++a) {
+            EXPECT_DOUBLE_EQ(via_reader.dim(pos, a), via_columns.dim(pos, a));
+        }
+    }
+}
+
+TEST(IndexTable, FromDimensionReaderStreamsAcrossMultipleChunks) {
+    // A small chunk size forces several blocks, including a partial last one;
+    // the streamed result must still match the single-shot interleave.
+    const auto columns = sample_columns_2d();
+    const auto expected = IndexTable::from_columns(columns);
+    const auto via_chunks = IndexTable::from_dimension_reader(
+        static_cast<DimensionId>(columns.size()), columns[0].size(),
+        [&](DimensionId axis, std::size_t off, std::size_t count,
+            std::span<double> out) {
+            for (std::size_t i = 0; i < count; ++i) out[i] = columns[axis][off + i];
+        },
+        /*chunk_rows=*/2);  // 5 rows -> blocks of 2, 2, 1
+
+    ASSERT_EQ(via_chunks.size(), expected.size());
+    for (IndexPos pos = 0; pos < via_chunks.size(); ++pos) {
+        EXPECT_EQ(via_chunks.row_id(pos), expected.row_id(pos));
+        for (DimensionId a = 0; a < via_chunks.dimensions(); ++a) {
+            EXPECT_DOUBLE_EQ(via_chunks.dim(pos, a), expected.dim(pos, a));
+        }
+    }
+}
+
+TEST(IndexTable, FromDimensionReaderRejectsBadArguments) {
+    const auto noop = [](DimensionId, std::size_t, std::size_t, std::span<double>) {};
+    EXPECT_THROW(IndexTable::from_dimension_reader(0, 5, noop),
+                 std::invalid_argument);  // zero dimensions
+    EXPECT_THROW(IndexTable::from_dimension_reader(2, 5, noop, /*chunk_rows=*/0),
+                 std::invalid_argument);  // zero chunk size
+}
+
 TEST(IndexTable, SwapPositionsMovesPointBlockAndRowIdTogether) {
     // I13: every permutation must keep dimensions and row_id aligned.
     const auto columns = sample_columns_2d();

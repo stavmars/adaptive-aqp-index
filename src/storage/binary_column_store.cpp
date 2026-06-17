@@ -147,7 +147,8 @@ struct BinaryColumnStore::IoRing {
 
 BinaryColumnStore::BinaryColumnStore(const std::filesystem::path& manifest_path,
                                      std::vector<MeasureId> selected_measures,
-                                     MeasureStorage measure_storage)
+                                     MeasureStorage measure_storage,
+                                     bool load_dims_resident)
     : manifest_(read_manifest(manifest_path)),
       manifest_dir_(manifest_path.parent_path()),
       storage_mode_(measure_storage) {
@@ -172,14 +173,36 @@ BinaryColumnStore::BinaryColumnStore(const std::filesystem::path& manifest_path,
         exposed_measures_ = std::move(selected_measures);
     }
 
-    // Dimension columns are loaded eagerly: the adaptive index needs to read,
-    // sort, and permute coordinates freely in RAM during grid construction and
-    // cracking. The full column fits comfortably for typical dataset sizes; if
-    // this ever needs to change the right place is here, not the access path.
-    dim_columns_.reserve(manifest_.dimensions.size());
-    for (const auto& d : manifest_.dimensions) {
-        const auto path = manifest_dir_ / d.file;
-        dim_columns_.push_back(read_double_file(path, manifest_.row_count));
+    // Dimension columns are kept resident only when requested. Otherwise their
+    // files are opened for on-demand block reads (read_dimension_chunk), so a
+    // caller that builds its own point table holds no full column.
+    if (load_dims_resident) {
+        dim_columns_.reserve(manifest_.dimensions.size());
+        for (const auto& d : manifest_.dimensions) {
+            const auto path = manifest_dir_ / d.file;
+            dim_columns_.push_back(read_double_file(path, manifest_.row_count));
+        }
+    } else {
+        dim_files_.resize(manifest_.dimensions.size());
+        for (std::size_t i = 0; i < manifest_.dimensions.size(); ++i) {
+            const auto path = manifest_dir_ / manifest_.dimensions[i].file;
+            const auto bytes = manifest_.row_count * sizeof(double);
+            int fd = ::open(path.c_str(), O_RDONLY);
+            if (fd < 0) {
+                throw std::runtime_error("cannot open dimension file: " + path.string() + ": " +
+                                         std::strerror(errno));
+            }
+            struct stat st{};
+            if (::fstat(fd, &st) != 0) {
+                ::close(fd);
+                throw std::runtime_error("fstat failed: " + path.string());
+            }
+            if (static_cast<std::uint64_t>(st.st_size) != bytes) {
+                ::close(fd);
+                throw std::runtime_error("dimension file size mismatch: " + path.string());
+            }
+            dim_files_[i] = {fd, bytes};
+        }
     }
 
     if (storage_mode_ == MeasureStorage::Eager) {
@@ -228,6 +251,9 @@ BinaryColumnStore::~BinaryColumnStore() {
     for (auto& c : measure_files_) {
         if (c.fd >= 0) ::close(c.fd);
     }
+    for (auto& c : dim_files_) {
+        if (c.fd >= 0) ::close(c.fd);
+    }
 }
 
 std::span<const double> BinaryColumnStore::dimension_column(DimensionId d) const {
@@ -235,6 +261,28 @@ std::span<const double> BinaryColumnStore::dimension_column(DimensionId d) const
         throw std::out_of_range("dimension_column: DimensionId out of range");
     }
     return std::span<const double>(dim_columns_[d]);
+}
+
+void BinaryColumnStore::read_dimension_chunk(DimensionId d, std::size_t row_offset,
+                                             std::size_t count,
+                                             std::span<double> out) const {
+    if (d >= manifest_.dimensions.size()) {
+        throw std::out_of_range("read_dimension_chunk: DimensionId out of range");
+    }
+    if (row_offset + count > manifest_.row_count) {
+        throw std::out_of_range("read_dimension_chunk: row range out of bounds");
+    }
+    if (out.size() < count) {
+        throw std::invalid_argument("read_dimension_chunk: output span too small");
+    }
+    if (count == 0) return;
+    if (!dim_columns_.empty()) {  // resident: copy the block
+        std::memcpy(out.data(), dim_columns_[d].data() + row_offset,
+                    count * sizeof(double));
+        return;
+    }
+    pread_exact(dim_files_[d].fd, out.data(), count * sizeof(double),
+                static_cast<std::uint64_t>(row_offset) * sizeof(double));
 }
 
 double BinaryColumnStore::measure_value(RowId r, MeasureId m) const {

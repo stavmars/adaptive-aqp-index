@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <optional>
 #include <span>
 #include <fstream>
 #include <sstream>
@@ -287,7 +288,10 @@ CellReport run_cell(const CellConfig& config) {
         selected.reserve(nm);
         for (std::size_t i = 0; i < nm; ++i) selected.push_back(static_cast<MeasureId>(i));
     }
-    BinaryColumnStore store(config.manifest_path, selected, config.measure_storage);
+    // The scan oracle reads dimensions resident; the engine path builds its own
+    // table and reads each dimension once, so it needs no resident copy.
+    BinaryColumnStore store(config.manifest_path, selected, config.measure_storage,
+                            /*load_dims_resident=*/spec.is_scan);
     const std::size_t served = store.measure_count();
 
     DatasetSchema schema;
@@ -307,24 +311,21 @@ CellReport run_cell(const CellConfig& config) {
     if (config.max_queries != 0 && config.max_queries < to_run) to_run = config.max_queries;
 
     // The engine path needs an in-memory point table and a substrate; the scan
-    // oracle needs neither.
-    IndexTable table = [&] {
-        // View the store's resident dimension columns directly; the AoS buffer
-        // is the only allocation, so no transient duplicate of every dimension
-        // column inflates the build-time peak.
-        std::vector<std::span<const double>> cols;
-        cols.reserve(d);
-        for (std::size_t i = 0; i < d; ++i) {
-            cols.push_back(store.dimension_column(static_cast<DimensionId>(i)));
-        }
-        return IndexTable::from_columns(
-            std::span<const std::span<const double>>(cols));
-    }();
-
+    // oracle needs neither. `table` is declared before `engine` so it outlives
+    // the engine that views it.
     std::unique_ptr<AdaptiveAccessPath> substrate;
+    std::optional<IndexTable>           table;
     std::unique_ptr<QueryEngine>        engine;
     double init_ms = 0.0;
     if (!spec.is_scan) {
+        // Interleave the dimensions into the point table by streaming the
+        // columns in blocks, so the table is the only full-size dimension copy.
+        table = IndexTable::from_dimension_reader(
+            static_cast<DimensionId>(d), store.row_count(),
+            [&](DimensionId axis, std::size_t off, std::size_t count,
+                std::span<double> out) {
+                store.read_dimension_chunk(axis, off, count, out);
+            });
         SubstrateConfig scfg;
         scfg.partition_size      = config.partition_size;
         scfg.stochastic_cracking = config.stochastic_cracking;
@@ -335,10 +336,10 @@ CellReport run_cell(const CellConfig& config) {
             scfg.data_bounds.dims.push_back(Range{dim.min, dim.max});
         }
         substrate = SubstrateFactory::instance().create(spec.substrate_id, scfg);
-        substrate->prepare(table);
+        substrate->prepare(*table);
         EngineConfig ecfg = behavior_config(spec.behavior);
         ecfg.sort_gather_by_row_id = config.sort_gather_by_row_id;
-        engine = std::make_unique<QueryEngine>(store, table, *substrate,
+        engine = std::make_unique<QueryEngine>(store, *table, *substrate,
                                                std::move(ecfg));
         // Build (and, for aggregating behaviors, precompute summaries) up front
         // so the cost is not folded into the first query's latency.

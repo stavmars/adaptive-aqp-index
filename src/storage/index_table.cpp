@@ -54,6 +54,48 @@ IndexTable IndexTable::from_columns(
     return from_columns(std::span<const std::span<const double>>(spans));
 }
 
+IndexTable IndexTable::from_dimension_reader(
+    DimensionId dimensions, std::size_t n,
+    const std::function<void(DimensionId, std::size_t, std::size_t,
+                             std::span<double>)>& read_chunk,
+    std::size_t chunk_rows) {
+    if (dimensions == 0) {
+        throw std::invalid_argument("IndexTable::from_dimension_reader: no dimensions");
+    }
+    if (n > std::numeric_limits<RowId>::max()) {
+        throw std::invalid_argument(
+            "IndexTable::from_dimension_reader: row count exceeds RowId range");
+    }
+    if (chunk_rows == 0) {
+        throw std::invalid_argument("IndexTable::from_dimension_reader: chunk_rows must be > 0");
+    }
+
+    // Stream every column in row blocks and interleave each block straight into
+    // the AoS buffer in row order, so the table is the only full-size dimension
+    // allocation -- the transient is just one small chunk per axis.
+    std::vector<double> points(n * dimensions);
+    std::vector<std::vector<double>> chunk(dimensions,
+                                           std::vector<double>(std::min(chunk_rows, n)));
+    for (std::size_t base = 0; base < n; base += chunk_rows) {
+        const std::size_t count = std::min(chunk_rows, n - base);
+        for (DimensionId axis = 0; axis < dimensions; ++axis) {
+            read_chunk(axis, base, count,
+                       std::span<double>(chunk[axis].data(), count));
+        }
+        for (std::size_t i = 0; i < count; ++i) {
+            double* dst = points.data() + (base + i) * dimensions;
+            for (DimensionId axis = 0; axis < dimensions; ++axis) {
+                dst[axis] = chunk[axis][i];
+            }
+        }
+    }
+
+    std::vector<RowId> row_ids(n);
+    std::iota(row_ids.begin(), row_ids.end(), RowId{0});
+
+    return IndexTable(std::move(points), std::move(row_ids), dimensions);
+}
+
 IndexTable::IndexTable(std::vector<double> points,
                        std::vector<RowId> row_ids,
                        DimensionId dimensions)

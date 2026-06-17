@@ -12,6 +12,8 @@
 #include <filesystem>
 #include <fstream>
 #include <random>
+#include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -134,6 +136,12 @@ TEST(BinaryColumnStore, HeaderedRoundTrip) {
     EXPECT_DOUBLE_EQ(dim0[0], -73.95);
     EXPECT_DOUBLE_EQ(dim0[2], -73.97);
 
+    // read_dimension_chunk serves the same values from the resident column.
+    std::vector<double> chunk(2);
+    store.read_dimension_chunk(0, 1, 2, std::span<double>(chunk.data(), chunk.size()));
+    EXPECT_DOUBLE_EQ(chunk[0], -73.96);
+    EXPECT_DOUBLE_EQ(chunk[1], -73.97);
+
     EXPECT_DOUBLE_EQ(store.measure_value(0, 0), 12.5);
     EXPECT_DOUBLE_EQ(store.measure_value(2, 0), 15.25);
     EXPECT_DOUBLE_EQ(store.measure_value(1, 1), 2.0);
@@ -144,6 +152,45 @@ TEST(BinaryColumnStore, HeaderedRoundTrip) {
     EXPECT_DOUBLE_EQ(stats.sum, 35.75);
     EXPECT_DOUBLE_EQ(stats.min, 8.0);
     EXPECT_DOUBLE_EQ(stats.max, 15.25);
+}
+
+TEST(BinaryColumnStore, NonResidentDimensionsReadOnDemand) {
+    TempDir tmp;
+    const auto csv = tmp / "taxi.csv";
+    write_text(csv,
+        "pickup_lon,pickup_lat,fare_amount,passenger_count\n"
+        "-73.95,40.78,12.5,1\n"
+        "-73.96,40.79,8.0,2\n"
+        "-73.97,40.80,15.25,3\n");
+
+    a3i::ConvertOptions opts;
+    opts.input_parquet = to_parquet(csv, /*has_header=*/true);
+    opts.output_dir = tmp / "prep";
+    opts.dataset_id = "taxi_tiny";
+    opts.dimensions = {
+        {"pickup_lon", -74.5, -73.5},
+        {"pickup_lat",  40.5,  41.5},
+    };
+    opts.measures = {"fare_amount", "passenger_count"};
+    const auto rep = a3i::run_parquet_to_columns(opts);
+
+    // Opened without resident dimensions: dimension_column is unavailable, but
+    // read_dimension_chunk returns the same values from storage on demand.
+    a3i::BinaryColumnStore store(rep.manifest_path, {},
+                                 a3i::MeasureStorage::OnDisk,
+                                 /*load_dims_resident=*/false);
+    EXPECT_THROW(store.dimension_column(0), std::out_of_range);
+
+    std::vector<double> buf(3);
+    store.read_dimension_chunk(0, 0, 3, std::span<double>(buf.data(), buf.size()));
+    EXPECT_DOUBLE_EQ(buf[0], -73.95);
+    EXPECT_DOUBLE_EQ(buf[2], -73.97);
+
+    // A partial block from an offset reads the same underlying values.
+    std::vector<double> tail(2);
+    store.read_dimension_chunk(0, 1, 2, std::span<double>(tail.data(), tail.size()));
+    EXPECT_DOUBLE_EQ(tail[0], -73.96);
+    EXPECT_DOUBLE_EQ(tail[1], -73.97);
 }
 
 // --- Headerless synthesized positional column names ---------------------

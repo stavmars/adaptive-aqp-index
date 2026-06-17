@@ -61,8 +61,9 @@ struct GatherPathStats {
 
 class BinaryColumnStore {
 public:
-    /// Open a prepared dataset by manifest path. Eagerly loads dimensions
-    /// into memory; backs the exposed measure columns per `measure_storage`.
+    /// Open a prepared dataset by manifest path. Loads the dimension columns
+    /// resident when `load_dims_resident` is set; backs the exposed measure
+    /// columns per `measure_storage`.
     ///
     /// `selected_measures` chooses which measure columns to expose, in the
     /// given order: the store then reports `measure_count()` of them and the
@@ -76,9 +77,16 @@ public:
     /// `measure_storage` selects the backing for the exposed columns. Eager is
     /// meaningful only when the dataset fits in RAM (it allocates one resident
     /// vector per exposed column); the access contract is otherwise identical.
+    ///
+    /// `load_dims_resident` keeps a resident copy of every dimension column,
+    /// exposed by `dimension_column`. When false, the columns are not cached;
+    /// their files are opened for on-demand block reads via
+    /// `read_dimension_chunk`, so a caller that builds its own table holds no
+    /// full column.
     explicit BinaryColumnStore(const std::filesystem::path& manifest_path,
                                std::vector<MeasureId> selected_measures = {},
-                               MeasureStorage measure_storage = MeasureStorage::OnDisk);
+                               MeasureStorage measure_storage = MeasureStorage::OnDisk,
+                               bool load_dims_resident = true);
     ~BinaryColumnStore();
 
     BinaryColumnStore(const BinaryColumnStore&) = delete;
@@ -91,8 +99,16 @@ public:
     std::size_t dimension_count() const noexcept { return manifest_.dimensions.size(); }
     std::size_t measure_count() const noexcept { return exposed_measures_.size(); }
 
-    /// In-memory contiguous view of one dimension column.
+    /// In-memory contiguous view of one dimension column. Valid only when the
+    /// store was opened with resident dimensions.
     std::span<const double> dimension_column(DimensionId d) const;
+
+    /// Read `count` values of dimension column `d` starting at row `row_offset`
+    /// into `out` (`out.size() >= count`). Serves a front-to-back table build
+    /// that never holds a full column; copies from the resident column when the
+    /// store keeps one, otherwise reads the block from storage.
+    void read_dimension_chunk(DimensionId d, std::size_t row_offset,
+                              std::size_t count, std::span<double> out) const;
 
     /// Random access to one measure value (a resident array index when the
     /// column is loaded eager, a single positional read when on disk). For
@@ -176,7 +192,8 @@ private:
 
     Manifest manifest_;
     std::filesystem::path manifest_dir_;
-    std::vector<std::vector<double>> dim_columns_;       ///< Eager copies.
+    std::vector<std::vector<double>> dim_columns_;       ///< Resident copies (when requested).
+    std::vector<OnDiskColumn>        dim_files_;         ///< Non-resident: one open fd per dimension.
     MeasureStorage                   storage_mode_ = MeasureStorage::OnDisk;
     std::vector<OnDiskColumn>        measure_files_;     ///< OnDisk mode: one per exposed measure.
     std::vector<std::vector<double>> measure_resident_;  ///< Eager mode: one per exposed measure.
