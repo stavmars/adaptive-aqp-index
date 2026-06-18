@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "a3i/substrates/adaptive_kd_access_path.hpp"
+#include "a3i/substrates/grid_akd_access_path.hpp"
 #include "a3i/substrates/static_kd_access_path.hpp"
 
 namespace a3i {
@@ -22,6 +23,11 @@ void register_builtins(SubstrateFactory& factory) {
         "static_kd",
         [](const SubstrateConfig& config) {
             return std::make_unique<StaticKdAccessPath>(config);
+        });
+    factory.register_substrate(
+        "grid_akd",
+        [](const SubstrateConfig& config) {
+            return std::make_unique<GridAkdAccessPath>(config);
         });
 }
 

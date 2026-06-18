@@ -13,28 +13,41 @@ void materialize_all_summaries(const AdaptiveAccessPath& access_path,
                                const IndexTable& table,
                                const BinaryColumnStore& store,
                                PartitionStateStore& state,
-                               std::size_t measure_count) {
+                               std::size_t measure_count,
+                               const std::vector<PartitionId>* owner_in) {
     const std::vector<PartitionId> active = access_path.active_partitions();
     if (active.empty() || measure_count == 0) return;
 
     const std::size_t n = table.size();
 
-    // Map each row to the active partition that owns it, in one pass over the
-    // partition ranges (no measure reads). Sized to the largest active id so it
-    // indexes densely.
+    // Largest active id, so the per-partition arrays index densely.
     PartitionId max_id = 0;
     for (PartitionId id : active) {
         if (id > max_id) max_id = id;
     }
-    std::vector<PartitionId> owner(n, 0);
+
+    // Map each row to the active partition that owns it, plus each partition's
+    // population. The caller may supply the row->partition map directly (built
+    // during the substrate's own partitioning); otherwise it is derived in one
+    // pass over the partition ranges. No measures are read here either way, and
+    // the population always comes from the ranges.
+    const bool have_owner = owner_in != nullptr && owner_in->size() == n;
+    std::vector<PartitionId> owner_local;
     std::vector<std::uint64_t> population(static_cast<std::size_t>(max_id) + 1, 0);
     for (PartitionId id : active) {
         const PartitionView pv = access_path.partition(id);
-        for (IndexPos pos = pv.begin; pos < pv.end; ++pos) {
-            owner[table.row_id(pos)] = id;
-        }
         population[id] = static_cast<std::uint64_t>(pv.end - pv.begin);
     }
+    if (!have_owner) {
+        owner_local.assign(n, 0);
+        for (PartitionId id : active) {
+            const PartitionView pv = access_path.partition(id);
+            for (IndexPos pos = pv.begin; pos < pv.end; ++pos) {
+                owner_local[table.row_id(pos)] = id;
+            }
+        }
+    }
+    const std::vector<PartitionId>& owner = have_owner ? *owner_in : owner_local;
 
     // Per-partition, per-measure exact moments, in a flat contiguous block
     // indexed [partition * measure_count + measure]. The accumulator access

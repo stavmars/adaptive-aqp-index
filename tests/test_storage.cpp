@@ -185,6 +185,40 @@ TEST(IndexTable, MutableSpansAllowInPlaceEdits) {
     EXPECT_EQ(table.row_id(1), 42u);
 }
 
+TEST(IndexTable, ReorderByKeyGroupsContiguouslyAndStably) {
+    // Keys: positions 0,2 -> group 1; 1,3 -> group 0; 4 -> group 2.
+    const auto columns = sample_columns_2d();
+    auto table = IndexTable::from_columns(columns);
+    const std::vector<std::uint32_t> key = {1, 0, 1, 0, 2};
+
+    const auto offsets = table.reorder_by_key(key, /*num_keys=*/3);
+
+    // Group boundaries: |group0|=2, |group1|=2, |group2|=1.
+    ASSERT_EQ(offsets.size(), 4u);
+    EXPECT_EQ(offsets[0], 0u);
+    EXPECT_EQ(offsets[1], 2u);
+    EXPECT_EQ(offsets[2], 4u);
+    EXPECT_EQ(offsets[3], 5u);
+
+    // Group 0 keeps original order (row_ids 1, 3); group 1 (row_ids 0, 2);
+    // group 2 (row_id 4). The dimension block must travel with its row_id.
+    const std::array<RowId, 5> expected_ids = {1, 3, 0, 2, 4};
+    for (IndexPos pos = 0; pos < table.size(); ++pos) {
+        EXPECT_EQ(table.row_id(pos), expected_ids[pos]);
+        EXPECT_DOUBLE_EQ(table.dim(pos, 0), columns[0][expected_ids[pos]]);
+        EXPECT_DOUBLE_EQ(table.dim(pos, 1), columns[1][expected_ids[pos]]);
+    }
+}
+
+TEST(IndexTable, ReorderByKeyRejectsBadArguments) {
+    const auto columns = sample_columns_2d();
+    auto table = IndexTable::from_columns(columns);
+    const std::vector<std::uint32_t> short_key = {0, 0};
+    EXPECT_THROW(table.reorder_by_key(short_key, 1), std::invalid_argument);
+    const std::vector<std::uint32_t> oob_key = {0, 1, 0, 0, 2};
+    EXPECT_THROW(table.reorder_by_key(oob_key, /*num_keys=*/2), std::out_of_range);
+}
+
 TEST(IndexTable, FromColumnsRejectsEmptyColumnSet) {
     const std::vector<std::vector<double>> none;
     EXPECT_THROW(IndexTable::from_columns(none), std::invalid_argument);

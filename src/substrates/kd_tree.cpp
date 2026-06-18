@@ -19,6 +19,50 @@ void KdTree::reset(const HyperRect& root_bounds, IndexPos n) {
     nodes_.push_back(std::move(root));
 }
 
+void KdTree::reset_with_children(const HyperRect& root_bounds, IndexPos n,
+                                 const std::vector<HyperRect>& child_bounds,
+                                 const std::vector<IndexPos>& offsets) {
+    if (offsets.size() != child_bounds.size() + 1) {
+        throw std::invalid_argument(
+            "KdTree::reset_with_children: offsets size must be child count + 1");
+    }
+    if (offsets.front() != 0 || offsets.back() != n) {
+        throw std::invalid_argument(
+            "KdTree::reset_with_children: offsets must start at 0 and end at n");
+    }
+
+    nodes_.clear();
+    nodes_.reserve(child_bounds.size() + 1);
+
+    // Node 0 is the parent over the whole range; it is inactive and its
+    // children are addressed by the caller, so the binary left/right links
+    // stay unset.
+    Node root;
+    root.id     = 0;
+    root.bounds = root_bounds;
+    root.begin  = 0;
+    root.end    = n;
+    root.leaf   = false;
+    root.active = false;
+    nodes_.push_back(std::move(root));
+
+    for (std::size_t i = 0; i < child_bounds.size(); ++i) {
+        if (offsets[i + 1] < offsets[i]) {
+            throw std::invalid_argument(
+                "KdTree::reset_with_children: offsets must be ascending");
+        }
+        Node child;
+        child.id     = static_cast<PartitionId>(i + 1);
+        child.bounds = child_bounds[i];
+        child.begin  = offsets[i];
+        child.end    = offsets[i + 1];
+        child.leaf   = true;
+        child.active = true;
+        child.parent = 0;
+        nodes_.push_back(std::move(child));
+    }
+}
+
 HyperRect KdTree::compute_root_bounds(const HyperRect& data_bounds,
                                       const IndexTable& table) {
     const std::size_t d = table.dimensions();

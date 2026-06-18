@@ -3,6 +3,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "a3i/substrates/kd_crack.hpp"
+
 namespace a3i {
 
 AdaptiveKdAccessPath::AdaptiveKdAccessPath(SubstrateConfig config)
@@ -42,33 +44,6 @@ Containment AdaptiveKdAccessPath::classify(PartitionId id,
     return tree_.classify(id, q);
 }
 
-PartitionId AdaptiveKdAccessPath::crack_partition_to_query(PartitionId id,
-                                                           const HyperRect& q,
-                                                           std::vector<PartitionId>& retired) {
-    const DimensionId d = static_cast<DimensionId>(q.dims.size());
-    PartitionId cur = id;
-
-    // Each lower bound trims off the points below the query; keep the >= child.
-    for (DimensionId axis = 0; axis < d; ++axis) {
-        if (tree_.population(cur) <= config_.partition_size) return cur;
-        auto split = tree_.split_node(*table_, cur, axis, q.dims[axis].low);
-        if (split) {
-            retired.push_back(cur);
-            cur = split->second;
-        }
-    }
-    // Each upper bound trims off the points at or above the query; keep the < child.
-    for (DimensionId axis = 0; axis < d; ++axis) {
-        if (tree_.population(cur) <= config_.partition_size) return cur;
-        auto split = tree_.split_node(*table_, cur, axis, q.dims[axis].high);
-        if (split) {
-            retired.push_back(cur);
-            cur = split->first;
-        }
-    }
-    return cur;
-}
-
 std::vector<PartitionId> AdaptiveKdAccessPath::refine(PartitionId id,
                                                      const HyperRect& q,
                                                      IndexTable& table) {
@@ -86,7 +61,7 @@ std::vector<PartitionId> AdaptiveKdAccessPath::refine(PartitionId id,
     // discards lies wholly outside `q` on some axis, so the descent that
     // follows reclassifies the resulting children: the discarded slabs as
     // disjoint, the surviving boundary child as contained or a smaller partial.
-    crack_partition_to_query(id, q, retired);
+    crack_to_query(tree_, *table_, id, q, config_.partition_size, retired);
     return retired;
 }
 

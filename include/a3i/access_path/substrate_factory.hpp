@@ -35,6 +35,10 @@ struct SubstrateConfig {
     /// the static substrate splits down to it.
     std::uint32_t partition_size       = 1024;
     bool          stochastic_cracking  = false;
+    /// Equi-width tiles per axis for the grid substrate: it forms
+    /// partitions_per_dimension^d tiles up front and cracks each toward queries
+    /// down to partition_size. Ignored by the other substrates.
+    std::uint32_t partitions_per_dimension = 1;
 };
 
 class SubstrateFactory {

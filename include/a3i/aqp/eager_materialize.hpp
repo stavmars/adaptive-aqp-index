@@ -24,9 +24,11 @@
 #pragma once
 
 #include <cstddef>
+#include <vector>
 
 #include "a3i/access_path/adaptive_access_path.hpp"
 #include "a3i/aqp/partition_state_store.hpp"
+#include "a3i/core/types.hpp"
 #include "a3i/storage/binary_column_store.hpp"
 #include "a3i/storage/index_table.hpp"
 
@@ -37,10 +39,15 @@ namespace a3i {
 /// row id at each position; `store` provides the measure values. Each of the
 /// `measure_count` measure columns is read once in ascending row-id order.
 /// Precondition: `access_path.ensure_built()` has run.
+///
+/// `owner`, when non-null, supplies the RowId -> active-partition map directly
+/// (size must equal table.size()), skipping its derivation from the partition
+/// ranges; when null the map is built by walking those ranges.
 void materialize_all_summaries(const AdaptiveAccessPath& access_path,
                                const IndexTable& table,
                                const BinaryColumnStore& store,
                                PartitionStateStore& state,
-                               std::size_t measure_count);
+                               std::size_t measure_count,
+                               const std::vector<PartitionId>* owner = nullptr);
 
 }  // namespace a3i

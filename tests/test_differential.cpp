@@ -116,6 +116,9 @@ struct Fixture {
     SubstrateConfig substrate() const {
         SubstrateConfig cfg;
         cfg.partition_size = 32;
+        // Exercises the grid substrate with a real multi-tile grid; the other
+        // substrates ignore this field.
+        cfg.partitions_per_dimension = 4;
         return cfg;
     }
 };
@@ -206,5 +209,31 @@ TEST(Differential, RandomBattery) {
         if (xlo > xhi) std::swap(xlo, xhi);
         if (ylo > yhi) std::swap(ylo, yhi);
         check(f, rect(xlo, xhi, ylo, yhi));
+    }
+}
+
+// The grid substrate, with summaries persisted, precomputes every tile's exact
+// summary up front (using its own row->tile map) and answers contained tiles
+// from those summaries. Results must still agree exactly with the oracle.
+TEST(Differential, GridEagerMaterializeMatchesOracle) {
+    Fixture f;
+    const std::vector<RangeQuery> qs = {
+        rect(0.0, kDomain, 0.0, kDomain),  // whole domain: every tile contained
+        rect(10.0, 60.0, 20.0, 80.0),
+        rect(0.0, 50.0, 50.0, 100.0),
+        rect(33.0, 66.0, 33.0, 66.0),
+        rect(200.0, 300.0, 200.0, 300.0),  // disjoint
+    };
+    for (const RangeQuery& q : qs) {
+        const QueryResult oracle = exact_scan(*f.store, f.schema, q);
+        IndexTable table = f.make_table();
+        auto path = SubstrateFactory::instance().create("grid_akd", f.substrate());
+        path->prepare(table);
+        EngineConfig cfg;
+        cfg.accuracy_mode    = EngineConfig::AccuracyMode::ForceExact;
+        cfg.persist_summaries = true;  // eager-materialize the tile summaries
+        QueryEngine engine(*f.store, table, *path, cfg);
+        const QueryResult got = engine.execute(q, 1);
+        expect_matches_oracle(got, oracle);
     }
 }

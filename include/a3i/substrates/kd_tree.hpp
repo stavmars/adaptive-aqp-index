@@ -48,6 +48,17 @@ public:
     /// [0, n) with the given bounds.
     void reset(const HyperRect& root_bounds, IndexPos n);
 
+    /// Discard any existing structure and install a root (id 0) over [0, n)
+    /// holding a pre-built flat set of child partitions. The root is an inactive
+    /// parent whose children are addressed by the caller rather than through the
+    /// binary left/right links; each child is an active leaf owning the
+    /// contiguous range [offsets[i], offsets[i+1]) with bounds child_bounds[i],
+    /// and may later be split by split_node(). `offsets` holds
+    /// child_bounds.size()+1 ascending entries, starting at 0 and ending at n.
+    void reset_with_children(const HyperRect& root_bounds, IndexPos n,
+                             const std::vector<HyperRect>& child_bounds,
+                             const std::vector<IndexPos>& offsets);
+
     /// Root bounds for an index over `table` whose data extent is `data_bounds`
     /// (per-axis [min, max]; pass an empty rect to derive it by scanning).
     ///

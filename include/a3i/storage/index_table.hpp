@@ -11,6 +11,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <span>
 #include <vector>
@@ -72,6 +73,16 @@ public:
     /// Swap two points in place: the whole d-dimensional block and the
     /// row_id move together (keeps dimensions and row_ids aligned).
     void swap_positions(IndexPos a, IndexPos b) noexcept;
+
+    /// Reorder points and row_ids out of place so positions sharing a key value
+    /// become contiguous, groups appear in ascending key order, and order within
+    /// a group is preserved. `key[pos]` is the group of the current position
+    /// `pos` (size must equal size(); values in [0, num_keys)). Returns the
+    /// prefix-sum offsets (size num_keys+1): group g owns [offsets[g],
+    /// offsets[g+1]). Allocates one transient copy of the point and row_id
+    /// buffers, which is released on return.
+    std::vector<IndexPos> reorder_by_key(std::span<const std::uint32_t> key,
+                                         std::size_t num_keys);
 
     /// Mutable spans for in-place permutation by the grid build and the
     /// cracking algorithm. Sized `size()*dimensions()` and `size()`.

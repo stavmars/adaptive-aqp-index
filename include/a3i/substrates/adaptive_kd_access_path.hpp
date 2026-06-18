@@ -42,15 +42,6 @@ public:
     bool has_prebuilt_partitions() const override { return false; }
 
 private:
-    // Isolate q from one boundary leaf: crack at each axis lower bound
-    // (descending into the >= child) then each upper bound (descending into
-    // the < child), stopping as soon as the surviving boundary child is no
-    // larger than the refinement threshold. Appends every retired parent id
-    // and returns the id of the surviving boundary child (== `id` if no
-    // crack succeeded). Every discarded child lies wholly outside q.
-    PartitionId crack_partition_to_query(PartitionId id, const HyperRect& q,
-                                         std::vector<PartitionId>& retired);
-
     SubstrateConfig config_;
     IndexTable*     table_ = nullptr;  ///< Non-owning; prepared at load time.
     bool            built_ = false;

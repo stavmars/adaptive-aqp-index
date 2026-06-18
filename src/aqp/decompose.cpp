@@ -113,7 +113,7 @@ struct Descender {
                 emit_reusable(pid, pv, population);
                 return;
             }
-            for (PartitionId ch : ap.children(pid)) descend(ch);
+            for (PartitionId ch : ap.overlapping_children(pid, q)) descend(ch);
             return;
         }
 
@@ -140,14 +140,14 @@ struct Descender {
                 // plane outside the data) leaves it a leaf to be scanned below.
                 if (!retired.empty()) ++result.partitions_refined;
                 if (!ap.is_leaf(pid)) {
-                    for (PartitionId ch : ap.children(pid)) descend(ch);
+                    for (PartitionId ch : ap.overlapping_children(pid, q)) descend(ch);
                     return;
                 }
             }
             emit_query_local(pid, pv, population);
             return;
         }
-        for (PartitionId ch : ap.children(pid)) descend(ch);
+        for (PartitionId ch : ap.overlapping_children(pid, q)) descend(ch);
     }
 };
 

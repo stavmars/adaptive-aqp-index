@@ -60,6 +60,17 @@ public:
     /// empty for a leaf. The inverse of parent().
     virtual std::vector<PartitionId> children(PartitionId id) const = 0;
 
+    /// The children of `id` that overlap `q`, used by the descent to skip
+    /// subtrees a substrate can rule out by geometry alone. The default returns
+    /// every child (the descent then drops the disjoint ones by classify); a
+    /// substrate that can address its children positionally may override this to
+    /// return only the overlapping ones. Pure geometry.
+    virtual std::vector<PartitionId> overlapping_children(PartitionId id,
+                                                          const HyperRect& q) const {
+        (void)q;
+        return children(id);
+    }
+
     /// True iff `id` has no children (== children(id).empty()).
     virtual bool is_leaf(PartitionId id) const = 0;
 
@@ -99,6 +110,12 @@ public:
     /// can be precomputed at initialization; it is independent of whether those
     /// partitions later refine (see `supports_refine()`).
     virtual bool has_prebuilt_partitions() const = 0;
+
+    /// Optional map from base-table RowId to the active partition that owns it,
+    /// if the substrate built one during `ensure_built()`. Indexed by RowId and
+    /// valid after `ensure_built()`. Returns nullptr when not available, in
+    /// which case the caller derives the mapping by walking partition ranges.
+    virtual const std::vector<PartitionId>* row_owner_map() const { return nullptr; }
 };
 
 }  // namespace a3i

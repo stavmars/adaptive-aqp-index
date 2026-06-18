@@ -52,8 +52,10 @@ add_library(a3i_core STATIC
     src/experiments/cell_runner.cpp
     src/access_path/substrate_factory.cpp
     src/substrates/kd_tree.cpp
+    src/substrates/kd_crack.cpp
     src/substrates/adaptive_kd_access_path.cpp
     src/substrates/static_kd_access_path.cpp
+    src/substrates/grid_akd_access_path.cpp
     src/aqp/summary.cpp
     src/aqp/partition_state_store.cpp
     src/aqp/sampler.cpp

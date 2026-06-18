@@ -61,7 +61,7 @@ void QueryEngine::initialize() {
     // touch as queries reach each partition.
     if (eager_materialize_) {
         materialize_all_summaries(access_path_, table_, store_, state_,
-                                  measure_count_);
+                                  measure_count_, access_path_.row_owner_map());
     }
     initialized_ = true;
 }

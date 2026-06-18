@@ -123,4 +123,46 @@ void IndexTable::swap_positions(IndexPos a, IndexPos b) noexcept {
     std::swap(row_ids_[a], row_ids_[b]);
 }
 
+std::vector<IndexPos> IndexTable::reorder_by_key(
+    std::span<const std::uint32_t> key, std::size_t num_keys) {
+    const std::size_t n = row_ids_.size();
+    if (key.size() != n) {
+        throw std::invalid_argument("IndexTable::reorder_by_key: key size must equal size()");
+    }
+
+    // Histogram into the offset slots, then prefix-sum so offsets[g] is the
+    // start of group g and offsets[num_keys] == n.
+    std::vector<IndexPos> offsets(num_keys + 1, 0);
+    for (std::size_t pos = 0; pos < n; ++pos) {
+        const std::uint32_t g = key[pos];
+        if (g >= num_keys) {
+            throw std::out_of_range("IndexTable::reorder_by_key: key out of range");
+        }
+        ++offsets[g + 1];
+    }
+    for (std::size_t g = 0; g < num_keys; ++g) {
+        offsets[g + 1] += offsets[g];
+    }
+
+    // Scatter each point and its row_id into the group slot, advancing a
+    // per-group cursor; the forward sweep keeps order stable within a group.
+    std::vector<double> new_points(points_.size());
+    std::vector<RowId>  new_row_ids(n);
+    std::vector<IndexPos> cursor(offsets.begin(), offsets.end() - 1);
+    for (std::size_t pos = 0; pos < n; ++pos) {
+        const std::uint32_t g = key[pos];
+        const IndexPos dst = cursor[g]++;
+        const double* src = points_.data() + pos * dimensions_;
+        double* out = new_points.data() + static_cast<std::size_t>(dst) * dimensions_;
+        for (DimensionId axis = 0; axis < dimensions_; ++axis) {
+            out[axis] = src[axis];
+        }
+        new_row_ids[dst] = row_ids_[pos];
+    }
+
+    points_  = std::move(new_points);
+    row_ids_ = std::move(new_row_ids);
+    return offsets;
+}
+
 }  // namespace a3i
