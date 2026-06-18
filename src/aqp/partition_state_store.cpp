@@ -26,7 +26,31 @@ void PartitionStateStore::ensure_partition(PartitionId id,
 }
 
 void PartitionStateStore::retire_partition(PartitionId id) {
-    state(id).current = false;
+    auto& st = state(id);
+    st.current = false;
+
+    // Refinement permutes the partition's rows in place, so this sample tracker
+    // (a set of positions) no longer identifies the sampled rows and is invalid
+    // either way; updating every tracker up the hierarchy on each crack would be
+    // expensive and is not useful in our approach. Release it.
+    st.tracker.reset();
+    for (auto& slot : st.summaries_by_measure) {
+        if (!slot) continue;
+        if (slot->complete()) {
+            // Keep an exact summary: a future query that fully contains this
+            // retired partition still answers from it with no reads. Drop its
+            // now-dead tracker reference.
+            slot->tracker.reset();
+        } else {
+            // A partial summary remains a valid sample of this partition and
+            // could answer a future query that fully contains it. We drop it
+            // anyway: it cannot be extended (its tracker is now stale), it is a
+            // coarser and less reusable unit than sampling the finer leaves, and
+            // the high-value reuse -- an exact region answering a containing
+            // query for free -- is retained above via the complete summaries.
+            slot.reset();
+        }
+    }
 }
 
 bool PartitionStateStore::is_current(PartitionId id) const {

@@ -95,17 +95,34 @@ TEST(PartitionStateStore, ReplaceWithCompleteMarksExact) {
     EXPECT_NEAR(s->non_nan.sum(), 28.0, 1e-12);
 }
 
-TEST(PartitionStateStore, RetireKeepsSummaries) {
+TEST(PartitionStateStore, RetireDropsPartialSummaryAndTracker) {
     PartitionStateStore store;
     const PartitionId p = store.register_partition(kMeasures);
     MeasureSummary& s = store.get_or_create(p, 0, 10);
-    s.sampled_rows = 4;
+    s.sampled_rows = 4;  // partial
+    ASSERT_NE(s.tracker, nullptr);
+
+    store.retire_partition(p);
+    EXPECT_FALSE(store.is_current(p));
+    // A partial sample cannot be reused after the crack permutes the rows, so
+    // its summary is dropped on retire.
+    EXPECT_EQ(store.find(p, 0), nullptr);
+}
+
+TEST(PartitionStateStore, RetireKeepsExactSummaryButFreesTracker) {
+    PartitionStateStore store;
+    const PartitionId p = store.register_partition(kMeasures);
+    MeasureSummary& s = store.get_or_create(p, 0, 4);
+    s.sampled_rows = 4;  // exact (== population)
+    ASSERT_TRUE(s.complete());
+    ASSERT_NE(s.tracker, nullptr);
 
     store.retire_partition(p);
     EXPECT_FALSE(store.is_current(p));
     const MeasureSummary* kept = store.find(p, 0);
-    ASSERT_NE(kept, nullptr);
-    EXPECT_EQ(kept->sampled_rows, 4u);  // summary retained
+    ASSERT_NE(kept, nullptr);            // exact summary retained for a containing query
+    EXPECT_TRUE(kept->complete());
+    EXPECT_EQ(kept->tracker, nullptr);   // dead tracker released
 }
 
 TEST(PartitionStateStore, EnsurePartitionGrowsStorage) {
