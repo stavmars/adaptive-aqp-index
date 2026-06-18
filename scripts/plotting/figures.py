@@ -30,7 +30,7 @@ class Figure:
 
 
 # Approximate run ids (the ones with error bounds / coverage).
-APPROX = ("a3i_akd", "akd_sampling")
+APPROX = ("a3i_akd", "akd_sampling", "a3i_grid_akd")
 
 # Default values the comparison figures pin the within-facet, non-method axes to:
 # a method comparison must hold every axis but the method fixed, so it picks one
@@ -101,6 +101,16 @@ def _annotate(base, *, nm=None, eb=None):
     return f"{base}\n({', '.join(bits)})" if bits else base
 
 
+def _cold_guard(frame):
+    """Require a shared `mem`; require a shared `cold` too, except for in-memory
+    (resident) cells, where cold/warm has no effect and so is not a
+    comparability axis."""
+    mem = aggregate.shared_or_raise(frame, "mem")
+    if not (isinstance(mem, str) and mem.upper() == "INMEM"):
+        aggregate.shared_or_raise(frame, "cold")
+    return mem
+
+
 def _method_slice(sub, eb, nm):
     """A clean method comparison within one facet: a single `nm` (the pinned one,
     falling back to the largest present), exact methods plus approximate ones at
@@ -113,8 +123,7 @@ def _method_slice(sub, eb, nm):
     s = s[s["eb"].isna() | (s["eb"] == eb)]
     if s.empty:
         return None
-    aggregate.shared_or_raise(s, "cold")
-    aggregate.shared_or_raise(s, "mem")
+    _cold_guard(s)
     return aggregate.clip_to_shared_prefix(s)
 
 
@@ -213,7 +222,7 @@ def _effect_of_nm(frame, eb, nm):
         s = sub[sub["eb"].isna() | (sub["eb"] == eb)]
         if s["nm"].dropna().nunique() < 2:
             continue
-        aggregate.shared_or_raise(s, "cold")
+        _cold_guard(s)
         aggregate.shared_or_raise(s, "mem")
         out.append((tag, render.sweep(aggregate.cell_summary(s, eb),
                                       x_axis="nm", metric="cum_ms",
@@ -229,7 +238,7 @@ def _effect_of_eb(frame, eb, nm):
             continue
         rnm = _resolve_nm(s, nm)
         s = s[s["nm"] == rnm]
-        aggregate.shared_or_raise(s, "cold")
+        _cold_guard(s)
         aggregate.shared_or_raise(s, "mem")
         out.append((tag, render.sweep(aggregate.cell_summary(s, eb),
                                       x_axis="eb", metric="total_latency_ms",
@@ -247,7 +256,7 @@ def _speedup_vs_error(frame, eb, nm):
         s = sub[sub["nm"] == rnm]
         if s[s["method"].isin(APPROX)]["eb"].dropna().nunique() < 2:
             continue
-        aggregate.shared_or_raise(s, "cold")
+        _cold_guard(s)
         aggregate.shared_or_raise(s, "mem")
         summ = aggregate.cell_summary(s, eb)
         summ = summ[summ["method"].isin(APPROX)].dropna(subset=["speedup_vs_scan", "eb"])
@@ -268,7 +277,7 @@ def _selectivity_sweep(frame, eb, nm):
             continue
         rnm = _resolve_nm(s, nm)
         s = s[s["nm"] == rnm]
-        aggregate.shared_or_raise(s, "cold")
+        _cold_guard(s)
         aggregate.shared_or_raise(s, "mem")
         summ = aggregate.cell_summary(s, eb)
         summ["selectivity"] = summ["workload"].map(_selectivity)
@@ -291,7 +300,7 @@ def _scalability_sweep(frame, eb, nm):
     for family, fsub in s.groupby("family", dropna=False):
         if fsub["N"].nunique() < 2:
             continue
-        aggregate.shared_or_raise(fsub, "cold")
+        _cold_guard(fsub)
         aggregate.shared_or_raise(fsub, "mem")
         summ = aggregate.cell_summary(fsub, eb)
         summ["N"] = summ["dataset"].map(_row_count)

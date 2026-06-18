@@ -47,7 +47,8 @@ HARD_AXES = ("mem",)
 
 
 # Canonical method order for the shared legend.
-METHOD_ORDER = ("scan", "kd", "kd_agg", "akd", "akd_agg", "akd_sampling", "a3i_akd")
+METHOD_ORDER = ("scan", "kd", "kd_agg", "akd", "akd_agg", "akd_sampling", "a3i_akd",
+                "a3i_grid_akd")
 
 
 def _write_legend(frame, out_dir: Path):

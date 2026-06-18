@@ -79,7 +79,7 @@ def diagnostics(sub, eb, nominal, dataset) -> list[dict]:
     full_reads = next((g(m, "total_reads") for m in ("kd", "akd", "scan")
                        if _row(sub, m) is not None), None)
     if full_reads is not None:
-        for m in ("a3i_akd", "akd_sampling"):
+        for m in ("a3i_akd", "akd_sampling", "a3i_grid_akd"):
             if _row(sub, m) is not None:
                 add(f"{m} <= exact reads (sample within population)",
                     g(m, "total_reads") <= full_reads + 2,
@@ -136,6 +136,29 @@ def diagnostics(sub, eb, nominal, dataset) -> list[dict]:
         add("a3i_akd ~no init", g("a3i_akd", "init_ms") < 100,
             f"{g('a3i_akd','init_ms'):.0f}ms", severity="WARN")
 
+    # --- grid (a3i_grid_akd): cheap bootstrap + exact-tile reuse --------------
+    # These are soft expectations (WARN), not invariants: a deviation flags a case worth
+    # inspecting (e.g. a clustered workload where equi-width tiles help less).
+    if have("a3i_grid_akd", "kd_agg"):
+        # The grid's whole point: a cheaper build than the static aggregating
+        # index, which pays the full top-down construction.
+        add("a3i_grid_akd build < kd_agg",
+            g("a3i_grid_akd", "init_ms") < g("kd_agg", "init_ms"),
+            f"{g('a3i_grid_akd','init_ms')/1e3:.1f}s vs {g('kd_agg','init_ms')/1e3:.1f}s",
+            severity="WARN")
+    if have("a3i_grid_akd", "a3i_akd"):
+        # Exact contained tiles + tile-bounded cracking should read no more than
+        # plain a3i sampling from a single root.
+        add("a3i_grid_akd <= a3i_akd (reads)",
+            g("a3i_grid_akd", "total_reads") <= g("a3i_akd", "total_reads"),
+            f"{g('a3i_grid_akd','total_reads'):,.0f} vs {g('a3i_akd','total_reads'):,.0f}",
+            severity="WARN")
+    if have("a3i_grid_akd", "scan"):
+        add("a3i_grid_akd beats scan",
+            g("a3i_grid_akd", "cum_ms") < g("scan", "cum_ms"),
+            f"{g('a3i_grid_akd','cum_ms')/1e3:.1f}s vs {g('scan','cum_ms')/1e3:.1f}s",
+            severity="WARN")
+
     # Answer correctness, error-vs-bound, and CI coverage are deliberately NOT
     # judged here. They are owned by validate_results.py, which checks them
     # per (measure, aggregate) over replicate runs -- the statistically sound
@@ -178,7 +201,8 @@ def main() -> int:
     # once per (slice, eb) -- every error bound present is checked, no --eb needed
     # (pass --eb only to restrict to one).
     slice_keys = ["dataset", "workload", "nm", "mem", "partition_size", "n"]
-    order = ["scan", "kd", "kd_agg", "akd", "akd_agg", "akd_sampling", "a3i_akd"]
+    order = ["scan", "kd", "kd_agg", "akd", "akd_agg", "akd_sampling", "a3i_akd",
+             "a3i_grid_akd"]
 
     if args.eb is not None:
         ebs = [args.eb]
@@ -207,7 +231,7 @@ def main() -> int:
             ds, wl, nm, mem, psize, n = keys
             # An eb context is only meaningful where an approximate method ran at
             # it; an exact-only slice is already covered under its own eb.
-            if not grp["method"].isin(("a3i_akd", "akd_sampling")).any():
+            if not grp["method"].isin(("a3i_akd", "akd_sampling", "a3i_grid_akd")).any():
                 continue
             sub = grp.set_index("method").reindex(
                 [m for m in order if m in grp["method"].values]).reset_index()

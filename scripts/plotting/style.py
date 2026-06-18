@@ -46,6 +46,7 @@ _METHOD_STYLE = {
     "akd_agg":      {"color": PALETTE["vermilion"], "marker": "v", "linestyle": "-."},
     "akd_sampling": {"color": PALETTE["green"],     "marker": "P", "linestyle": ":"},
     "a3i_akd":      {"color": PALETTE["purple"],    "marker": "*", "linestyle": "-"},
+    "a3i_grid_akd": {"color": PALETTE["purple"], "marker": "X", "linestyle": "--", "label": "a3i_cgi"},
 }
 _FALLBACK_STYLE = {"color": PALETTE["yellow"], "marker": "x", "linestyle": "-"}
 
