@@ -58,6 +58,8 @@ struct CellConfig {
     /// Substrate construction knobs.
     std::uint32_t partition_size       = 1024;
     bool          stochastic_cracking  = false;
+    /// Equi-width tiles per axis for the grid substrate (ignored by others).
+    std::uint32_t partitions_per_dimension = 1;
 
     /// Sort each round's gathered row ids ascending before reading measures
     /// (gather locality). Recorded in the sidecar so results built under

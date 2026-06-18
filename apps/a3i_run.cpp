@@ -21,7 +21,7 @@ void print_usage(std::ostream& os) {
 "               --method <name> --qresults <out.csv> --runmeta <out.json>\n"
 "               [--dataset <id>] [--workload-name <id>]\n"
 "               [--num-measures <k>] [--error-bound <eps>] [--confidence <c>]\n"
-"               [--partition-size <N>]\n"
+"               [--partition-size <N>] [--partitions-per-dimension <N>]\n"
 "               [--stochastic-cracking] [--no-sort-gather] [--in-memory]\n"
 "               [--run-id <R>] [--max-queries <N>] [--cold true|false]\n"
 "\n"
@@ -30,6 +30,7 @@ void print_usage(std::ostream& os) {
 "  kd | kd_agg | static_kd + plain | aggregating | accuracy-aware\n"
 "  akd | akd_agg | akd_sampling | a3i_akd\n"
 "                 adaptive_kd + plain | aggregating | sampling | accuracy-aware\n"
+"  a3i_grid_akd   grid_akd + accuracy-aware\n"
 "\n"
 "  --describe-methods   print the method catalog as JSON and exit\n"
 "  --version            print the engine build version and exit\n"
@@ -96,7 +97,7 @@ int main(int argc, char** argv) try {
 
     a3i::CellConfig cfg;
     std::string manifest, workload, qresults, runmeta;
-    std::string nm_str, eb_str, conf_str, psize_str, run_str, maxq_str, cold_str;
+    std::string nm_str, eb_str, conf_str, psize_str, run_str, maxq_str, cold_str, ppd_str;
 
     int i = 1;
     while (i < argc) {
@@ -112,6 +113,7 @@ int main(int argc, char** argv) try {
         if (eat_kv(i, argc, argv, "--error-bound", val))          { eb_str = val; continue; }
         if (eat_kv(i, argc, argv, "--confidence", val))           { conf_str = val; continue; }
         if (eat_kv(i, argc, argv, "--partition-size", val))       { psize_str = val; continue; }
+        if (eat_kv(i, argc, argv, "--partitions-per-dimension", val)) { ppd_str = val; continue; }
         if (eat_kv(i, argc, argv, "--run-id", val))               { run_str = val; continue; }
         if (eat_kv(i, argc, argv, "--max-queries", val))          { maxq_str = val; continue; }
         if (eat_kv(i, argc, argv, "--cold", val))                 { cold_str = val; continue; }
@@ -136,6 +138,7 @@ int main(int argc, char** argv) try {
     if (!eb_str.empty())   cfg.error_bound          = std::stod(eb_str);
     if (!conf_str.empty()) cfg.confidence           = std::stod(conf_str);
     if (!psize_str.empty()) cfg.partition_size = static_cast<std::uint32_t>(std::stoul(psize_str));
+    if (!ppd_str.empty()) cfg.partitions_per_dimension = static_cast<std::uint32_t>(std::stoul(ppd_str));
     if (!run_str.empty())  cfg.run_id               = std::stoull(run_str);
     if (!maxq_str.empty()) cfg.max_queries          = std::stoull(maxq_str);
     if (!cold_str.empty()) cfg.cold                 = parse_bool(cold_str);

@@ -91,6 +91,7 @@ const MethodEntry kMethods[] = {
     {"akd_agg",      false, "adaptive_kd", Behavior::Agg},
     {"akd_sampling", false, "adaptive_kd", Behavior::Sampling},
     {"a3i_akd",           false, "adaptive_kd", Behavior::A3i},
+    {"a3i_grid_akd",      false, "grid_akd",    Behavior::A3i},
 };
 
 // The label written to the `substrate` column / results path.
@@ -329,6 +330,7 @@ CellReport run_cell(const CellConfig& config) {
         SubstrateConfig scfg;
         scfg.partition_size      = config.partition_size;
         scfg.stochastic_cracking = config.stochastic_cracking;
+        scfg.partitions_per_dimension = config.partitions_per_dimension;
         // Size the index to the observed data extent (per-dimension min/max),
         // not the declared domain; the declared domain is the workload's.
         scfg.data_bounds.dims.reserve(manifest.dimensions.size());
@@ -388,6 +390,7 @@ CellReport run_cell(const CellConfig& config) {
         meta["error_bound"]          = config.error_bound;
         meta["confidence"]           = config.confidence;
         meta["partition_size"]       = config.partition_size;
+        meta["partitions_per_dimension"] = config.partitions_per_dimension;
         meta["stochastic_cracking"]  = config.stochastic_cracking;
         meta["sort_gather_by_row_id"] = config.sort_gather_by_row_id;
         meta["measure_storage"]      =

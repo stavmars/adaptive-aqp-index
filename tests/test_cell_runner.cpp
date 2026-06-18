@@ -292,11 +292,12 @@ TEST(CellRunner, MethodCatalogIsSingleSourceOfTruth) {
     EXPECT_FALSE(by_name.at("scan").approx);
     EXPECT_EQ(by_name.at("kd").substrate, "static_kd");
     EXPECT_EQ(by_name.at("a3i_akd").substrate, "adaptive_kd");
+    EXPECT_EQ(by_name.at("a3i_grid_akd").substrate, "grid_akd");
 
     std::map<std::string, bool> expected_approx = {
         {"scan", false}, {"kd", false}, {"kd_agg", false},
         {"akd", false}, {"akd_agg", false}, {"akd_sampling", true},
-        {"a3i_akd", true},
+        {"a3i_akd", true}, {"a3i_grid_akd", true},
     };
     ASSERT_EQ(by_name.size(), expected_approx.size());
     for (const auto& [name, approx] : expected_approx) {
