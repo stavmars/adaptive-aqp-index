@@ -67,7 +67,8 @@ PLANS_DIR = REPO_ROOT / "experiments" / "plans"
 WORKLOAD_CONFIG_DIR = REPO_ROOT / "configs" / "workloads"
 
 AXIS_KEYS = ("runs", "workloads", "nm", "eb", "partition_size", "mem", "run_id",
-             "run_id_by_method", "max_queries", "confidence")
+             "run_id_by_method", "max_queries", "confidence",
+             "partitions_per_dimension")
 
 # Holds the single-instance flock for the process lifetime (see main()).
 _instance_lock = None
@@ -247,10 +248,15 @@ def mem_bytes(mem: str) -> int | None:
     return int(s)
 
 
-def cell_key(nm: int, mem: str, psize: int, q: int, eb: float, approx: bool) -> str:
+def cell_key(nm: int, mem: str, psize: int, q: int, eb: float, approx: bool,
+             ppd: int = 1) -> str:
     parts = [f"mcols{nm}", f"mem{mem_tag(mem)}", f"ps{psize}", f"n{q}"]
     if approx:
         parts.append(f"err{eb:g}")
+    # Only the grid substrate uses a tile resolution > 1; tag the key so its
+    # cells are distinct without changing any other method's key.
+    if ppd != 1:
+        parts.append(f"ppd{ppd}")
     return "_".join(sorted(parts))
 
 
@@ -300,7 +306,7 @@ def workload_query_count(csv_path: Path) -> int:
 class Cell:
     __slots__ = ("method", "substrate", "dataset", "workload", "nm", "eb",
                  "psize", "mem", "run_id", "max_queries", "confidence",
-                 "approx", "key", "qcount")
+                 "approx", "key", "qcount", "ppd")
 
     def __init__(self, **kw):
         for k, v in kw.items():
@@ -342,6 +348,9 @@ def enumerate_cells(plan: dict, catalog: dict, prepared_root: Path,
                 sys.exit(f"unknown run/method '{method}' in plan")
             substrate = run_substrate[method]
             approx = method in approximate_runs
+            # The tile resolution only applies to the grid substrate; every
+            # other method ignores it and keeps a resolution of 1.
+            ppd = plan["partitions_per_dimension"] if substrate == "grid_akd" else 1
             run_ids = per_method_runs.get(method, plan["run_id"])
             for nm in plan["nm"]:
                 if nm > measure_counts[dataset]:
@@ -360,13 +369,14 @@ def enumerate_cells(plan: dict, catalog: dict, prepared_root: Path,
                             eb_values = plan["eb"] if approx else [None]
                             for eb in eb_values:
                                 key = cell_key(nm, mem, psize, qcount,
-                                               eb if eb is not None else 0.0, approx)
+                                               eb if eb is not None else 0.0, approx,
+                                               ppd)
                                 cells.append(Cell(
                                     method=method, substrate=substrate,
                                     dataset=dataset, workload=wid, nm=nm,
                                     eb=eb, psize=psize, mem=mem, run_id=run_id,
                                     max_queries=mq, confidence=plan["confidence"],
-                                    approx=approx, key=key, qcount=qcount))
+                                    approx=approx, key=key, qcount=qcount, ppd=ppd))
     return cells
 
 
@@ -477,6 +487,7 @@ def run_cell(a3i_run: Path, cell: Cell, manifest: Path, workload_csv: Path,
            "--num-measures", str(cell.nm),
            "--confidence", repr(float(cell.confidence)),
            "--partition-size", str(cell.psize),
+           "--partitions-per-dimension", str(cell.ppd),
            "--run-id", str(cell.run_id),
            "--cold", "true" if cold else "false"]
     if cell.eb is not None:

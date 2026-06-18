@@ -9,6 +9,8 @@
 #               exceeding a dataset's measure count are pruned per dataset
 #   eb          error bound; applied to APPROXIMATE runs only (a3i_akd, akd_sampling)
 #   partition_size  maximum rows per partition (e.g the leaf size in kd tree, or the cracking threshold in an adaptive substrate)
+#   partitions_per_dimension  grid substrate only: equi-width tiles per axis (the
+#               coarse partition cracked down to partition_size); other methods ignore it
 #   mem         memory setting per run: unbounded (mmap, no cap), inmem (measure
 #               columns loaded fully resident, no cap), or a cap like 16GiB (mmap
 #               under a cgroup budget). The measure storage backing follows from it.
@@ -19,7 +21,7 @@
 #   max_queries cap on queries replayed (null = full sequence)
 #   confidence  CI confidence level (applies to approximate runs)
 
-runs: [scan, kd, kd_agg, akd, akd_agg, akd_sampling, a3i_akd]
+runs: [scan, kd, kd_agg, akd, akd_agg, akd_sampling, a3i_akd, a3i_grid_akd]
 
 workloads:
   - taxi_random
@@ -33,12 +35,12 @@ workloads:
 nm: [4]
 eb: [0.01]
 partition_size: [1024]
+partitions_per_dimension: 200
 mem: [inmem]
 run_id: [0]
 run_id_by_method:
-  scan:   [0]         
-  kd:     [0]
-  kd_agg: [0]
+  akd_sampling: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] 
   a3i_akd:    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  a3i_grid_akd: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 max_queries: null
 confidence: 0.95
