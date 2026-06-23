@@ -78,11 +78,11 @@ public:
     /// meaningful only when the dataset fits in RAM (it allocates one resident
     /// vector per exposed column); the access contract is otherwise identical.
     ///
-    /// `load_dims_resident` keeps a resident copy of every dimension column,
-    /// exposed by `dimension_column`. When false, the columns are not cached;
-    /// their files are opened for on-demand block reads via
-    /// `read_dimension_chunk`, so a caller that builds its own table holds no
-    /// full column.
+    /// `load_dims_resident` additionally keeps a resident copy of every
+    /// dimension column, exposed by `dimension_column`. The per-column files are
+    /// always opened for on-demand block reads via `read_dimension_chunk`, which
+    /// serves from the resident copy while present (until
+    /// `release_resident_dimensions`) and from storage otherwise.
     explicit BinaryColumnStore(const std::filesystem::path& manifest_path,
                                std::vector<MeasureId> selected_measures = {},
                                MeasureStorage measure_storage = MeasureStorage::OnDisk,
@@ -102,6 +102,11 @@ public:
     /// In-memory contiguous view of one dimension column. Valid only when the
     /// store was opened with resident dimensions.
     std::span<const double> dimension_column(DimensionId d) const;
+
+    /// Drop the resident dimension copies (if any). Subsequent
+    /// `read_dimension_chunk` calls serve from storage. Lets a caller consume
+    /// the columns resident once and then reclaim the memory.
+    void release_resident_dimensions();
 
     /// Read `count` values of dimension column `d` starting at row `row_offset`
     /// into `out` (`out.size() >= count`). Serves a front-to-back table build

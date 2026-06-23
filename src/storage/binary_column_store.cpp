@@ -173,16 +173,11 @@ BinaryColumnStore::BinaryColumnStore(const std::filesystem::path& manifest_path,
         exposed_measures_ = std::move(selected_measures);
     }
 
-    // Dimension columns are kept resident only when requested. Otherwise their
-    // files are opened for on-demand block reads (read_dimension_chunk), so a
-    // caller that builds its own point table holds no full column.
-    if (load_dims_resident) {
-        dim_columns_.reserve(manifest_.dimensions.size());
-        for (const auto& d : manifest_.dimensions) {
-            const auto path = manifest_dir_ / d.file;
-            dim_columns_.push_back(read_double_file(path, manifest_.row_count));
-        }
-    } else {
+    // Open a descriptor per dimension column for on-demand block reads. A
+    // resident copy is loaded in addition when requested; read_dimension_chunk
+    // serves from it while present and from these descriptors once it is
+    // released, so a caller can consume the columns resident and then drop them.
+    {
         dim_files_.resize(manifest_.dimensions.size());
         for (std::size_t i = 0; i < manifest_.dimensions.size(); ++i) {
             const auto path = manifest_dir_ / manifest_.dimensions[i].file;
@@ -202,6 +197,13 @@ BinaryColumnStore::BinaryColumnStore(const std::filesystem::path& manifest_path,
                 throw std::runtime_error("dimension file size mismatch: " + path.string());
             }
             dim_files_[i] = {fd, bytes};
+        }
+    }
+    if (load_dims_resident) {
+        dim_columns_.reserve(manifest_.dimensions.size());
+        for (const auto& d : manifest_.dimensions) {
+            const auto path = manifest_dir_ / d.file;
+            dim_columns_.push_back(read_double_file(path, manifest_.row_count));
         }
     }
 
@@ -261,6 +263,11 @@ std::span<const double> BinaryColumnStore::dimension_column(DimensionId d) const
         throw std::out_of_range("dimension_column: DimensionId out of range");
     }
     return std::span<const double>(dim_columns_[d]);
+}
+
+void BinaryColumnStore::release_resident_dimensions() {
+    dim_columns_.clear();
+    dim_columns_.shrink_to_fit();
 }
 
 void BinaryColumnStore::read_dimension_chunk(DimensionId d, std::size_t row_offset,

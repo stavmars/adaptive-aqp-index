@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <limits>
+#include <span>
 #include <stdexcept>
 #include <utility>
 
+#include "a3i/storage/binary_column_store.hpp"
 #include "a3i/substrates/kd_crack.hpp"
 
 namespace a3i {
@@ -18,8 +20,8 @@ void GridAkdAccessPath::prepare(IndexTable& table) {
 }
 
 std::uint32_t GridAkdAccessPath::cell_index(DimensionId axis, double v) const {
-    if (width_[axis] <= 0.0) return 0;
-    const double f = (v - lo_[axis]) / width_[axis];
+    // inv_width_ is 0 for a degenerate axis, so f collapses to 0 there.
+    const double f = (v - lo_[axis]) * inv_width_[axis];
     if (f <= 0.0) return 0;
     if (f >= static_cast<double>(k_)) return k_ - 1;
     return static_cast<std::uint32_t>(f);  // floor for a non-negative value
@@ -73,11 +75,26 @@ void GridAkdAccessPath::ensure_built() {
     domain_ = KdTree::compute_root_bounds(config_.data_bounds, *table_);
     lo_.assign(dims_, 0.0);
     width_.assign(dims_, 0.0);
+    inv_width_.assign(dims_, 0.0);
     for (DimensionId a = 0; a < dims_; ++a) {
         lo_[a] = domain_.dims[a].low;
         width_[a] = (domain_.dims[a].high - lo_[a]) / static_cast<double>(k_);
+        inv_width_[a] = width_[a] > 0.0 ? 1.0 / width_[a] : 0.0;
     }
 
+    // When a dimension store is provided the table is built directly in tile
+    // order from its columns, so the original-order copy is never materialized;
+    // otherwise the prepared table is tiled and reordered out of place.
+    if (store_ != nullptr) {
+        build_from_dimension_store();
+    } else {
+        build_from_table();
+    }
+
+    built_ = true;
+}
+
+void GridAkdAccessPath::build_from_table() {
     const std::size_t n = table_->size();
 
     // Tile each point. Positions are row-major here (pos == row_id), so the
@@ -93,7 +110,43 @@ void GridAkdAccessPath::ensure_built() {
 
     // Group the points by tile (out of place); offsets[c] is tile c's start.
     const std::vector<IndexPos> offsets = table_->reorder_by_key(cell, tiles_);
+    install_tiles(n, offsets, cell);
+}
 
+void GridAkdAccessPath::build_from_dimension_store() {
+    const std::size_t n = store_->row_count();
+
+    // Tile each row from the resident dimension columns and prefix-sum the
+    // per-tile counts into group offsets (offsets[c] is tile c's start).
+    std::vector<std::span<const double>> cols(dims_);
+    for (DimensionId a = 0; a < dims_; ++a) cols[a] = store_->dimension_column(a);
+    std::vector<std::uint32_t> cell(n);
+    std::vector<IndexPos> offsets(static_cast<std::size_t>(tiles_) + 1, 0);
+    std::vector<std::uint32_t> idx(dims_);
+    for (std::size_t r = 0; r < n; ++r) {
+        for (DimensionId a = 0; a < dims_; ++a) idx[a] = cell_index(a, cols[a][r]);
+        const std::uint32_t c = flatten(idx);
+        cell[r] = c;
+        ++offsets[c + 1];
+    }
+    for (std::uint32_t c = 0; c < tiles_; ++c) offsets[c + 1] += offsets[c];
+
+    // Drop the resident columns, then scatter the table from storage so only the
+    // final tile-ordered layout is ever materialized.
+    store_->release_resident_dimensions();
+    table_->scatter_grouped_from_reader(
+        cell, offsets,
+        [this](DimensionId a, std::size_t off, std::size_t count,
+               std::span<double> out) {
+            store_->read_dimension_chunk(a, off, count, out);
+        });
+
+    install_tiles(n, offsets, cell);
+}
+
+void GridAkdAccessPath::install_tiles(std::size_t n,
+                                      const std::vector<IndexPos>& offsets,
+                                      const std::vector<std::uint32_t>& cell) {
     // Install the root (id 0) with one child per tile (ids 1..G).
     std::vector<HyperRect> bounds(tiles_);
     for (std::uint32_t c = 0; c < tiles_; ++c) bounds[c] = tile_bounds(c);
@@ -104,8 +157,6 @@ void GridAkdAccessPath::ensure_built() {
     for (std::size_t r = 0; r < n; ++r) {
         owner_[r] = static_cast<PartitionId>(1 + cell[r]);
     }
-
-    built_ = true;
 }
 
 std::vector<PartitionId> GridAkdAccessPath::roots() const { return tree_.roots(); }

@@ -96,6 +96,62 @@ IndexTable IndexTable::from_dimension_reader(
     return IndexTable(std::move(points), std::move(row_ids), dimensions);
 }
 
+IndexTable IndexTable::empty(DimensionId dimensions) {
+    return IndexTable(std::vector<double>{}, std::vector<RowId>{}, dimensions);
+}
+
+void IndexTable::scatter_grouped_from_reader(
+    std::span<const std::uint32_t> cell,
+    std::span<const IndexPos> offsets,
+    const std::function<void(DimensionId, std::size_t, std::size_t,
+                             std::span<double>)>& read_chunk,
+    std::size_t chunk_rows) {
+    const std::size_t n = cell.size();
+    if (n > std::numeric_limits<RowId>::max()) {
+        throw std::invalid_argument(
+            "IndexTable::scatter_grouped_from_reader: row count exceeds RowId range");
+    }
+    if (offsets.empty() ||
+        offsets.back() != static_cast<IndexPos>(n)) {
+        throw std::invalid_argument(
+            "IndexTable::scatter_grouped_from_reader: offsets must end at cell size");
+    }
+    if (chunk_rows == 0) {
+        throw std::invalid_argument(
+            "IndexTable::scatter_grouped_from_reader: chunk_rows must be > 0");
+    }
+
+    // The final buffers are the only full-size point allocation. A per-group
+    // write cursor starts at each group's offset and advances as rows land.
+    points_.assign(n * dimensions_, 0.0);
+    row_ids_.assign(n, RowId{0});
+    std::vector<IndexPos> cursor(offsets.begin(), offsets.end() - 1);
+
+    // Stream the columns in row blocks into one flat per-axis chunk buffer and
+    // scatter each row of the block into the next free slot of its group; only
+    // one small block per axis is held at a time.
+    const std::size_t cr = n == 0 ? 1 : std::min(chunk_rows, n);
+    std::vector<double> chunk(static_cast<std::size_t>(dimensions_) * cr);
+    for (std::size_t base = 0; base < n; base += cr) {
+        const std::size_t count = std::min(cr, n - base);
+        for (DimensionId axis = 0; axis < dimensions_; ++axis) {
+            read_chunk(axis, base, count,
+                       std::span<double>(chunk.data() + static_cast<std::size_t>(axis) * cr,
+                                         count));
+        }
+        for (std::size_t i = 0; i < count; ++i) {
+            const std::size_t pos = base + i;
+            const std::uint32_t g = cell[pos];
+            const IndexPos dst = cursor[g]++;
+            double* out = points_.data() + static_cast<std::size_t>(dst) * dimensions_;
+            for (DimensionId axis = 0; axis < dimensions_; ++axis) {
+                out[axis] = chunk[static_cast<std::size_t>(axis) * cr + i];
+            }
+            row_ids_[dst] = static_cast<RowId>(pos);
+        }
+    }
+}
+
 IndexTable::IndexTable(std::vector<double> points,
                        std::vector<RowId> row_ids,
                        DimensionId dimensions)

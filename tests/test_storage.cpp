@@ -219,6 +219,46 @@ TEST(IndexTable, ReorderByKeyRejectsBadArguments) {
     EXPECT_THROW(table.reorder_by_key(oob_key, /*num_keys=*/2), std::out_of_range);
 }
 
+TEST(IndexTable, ScatterGroupedFromReaderMatchesReorderByKey) {
+    // Building the grouped table by streaming the columns once into an empty
+    // table must yield the same layout as reordering an interleaved table.
+    const auto columns = sample_columns_2d();
+    const std::vector<std::uint32_t> key = {1, 0, 1, 0, 2};
+    const auto reader = [&](DimensionId axis, std::size_t off, std::size_t count,
+                            std::span<double> out) {
+        for (std::size_t i = 0; i < count; ++i) out[i] = columns[axis][off + i];
+    };
+
+    auto reordered = IndexTable::from_columns(columns);
+    const auto offsets = reordered.reorder_by_key(key, /*num_keys=*/3);
+
+    // A small chunk size also exercises the multi-block streaming path.
+    auto scattered = IndexTable::empty(static_cast<DimensionId>(columns.size()));
+    scattered.scatter_grouped_from_reader(key, offsets, reader, /*chunk_rows=*/2);
+
+    ASSERT_EQ(scattered.size(), reordered.size());
+    ASSERT_EQ(scattered.dimensions(), reordered.dimensions());
+    for (IndexPos pos = 0; pos < scattered.size(); ++pos) {
+        EXPECT_EQ(scattered.row_id(pos), reordered.row_id(pos));
+        for (DimensionId a = 0; a < scattered.dimensions(); ++a) {
+            EXPECT_DOUBLE_EQ(scattered.dim(pos, a), reordered.dim(pos, a));
+        }
+    }
+}
+
+TEST(IndexTable, ScatterGroupedFromReaderRejectsBadArguments) {
+    auto table = IndexTable::empty(2);
+    const std::vector<std::uint32_t> cell = {0, 1, 0};
+    const auto noop = [](DimensionId, std::size_t, std::size_t, std::span<double>) {};
+    // offsets must end at the row count.
+    const std::vector<IndexPos> bad_back = {0, 1, 2};
+    EXPECT_THROW(table.scatter_grouped_from_reader(cell, bad_back, noop),
+                 std::invalid_argument);
+    const std::vector<IndexPos> good = {0, 2, 3};
+    EXPECT_THROW(table.scatter_grouped_from_reader(cell, good, noop, /*chunk_rows=*/0),
+                 std::invalid_argument);
+}
+
 TEST(IndexTable, FromColumnsRejectsEmptyColumnSet) {
     const std::vector<std::vector<double>> none;
     EXPECT_THROW(IndexTable::from_columns(none), std::invalid_argument);

@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include "a3i/access_path/adaptive_access_path.hpp"
@@ -26,6 +27,8 @@
 #include "a3i/substrates/kd_tree.hpp"
 
 namespace a3i {
+
+class BinaryColumnStore;
 
 class GridAkdAccessPath : public AdaptiveAccessPath {
 public:
@@ -49,6 +52,8 @@ public:
     const std::vector<PartitionId>* row_owner_map() const override {
         return built_ ? &owner_ : nullptr;
     }
+    bool builds_table_from_dimension_store() const override { return true; }
+    void set_dimension_store(BinaryColumnStore* store) override { store_ = store; }
 
 private:
     // Tile index of value `v` on `axis`, clamped to [0, k_-1].
@@ -56,9 +61,19 @@ private:
     // Flatten/decode per-axis tile indices to/from the row-major flat tile id.
     std::uint32_t flatten(const std::vector<std::uint32_t>& idx) const;
     HyperRect tile_bounds(std::uint32_t flat_cell) const;
+    // Tile the prepared resident table and reorder it in place.
+    void build_from_table();
+    // Tile from the store's resident dimension columns, release them, and
+    // scatter the table from storage so only the final order is materialized.
+    void build_from_dimension_store();
+    // Install the root with one child per tile from the prefix-sum offsets and
+    // record the RowId -> tile owner map (shared by both build paths).
+    void install_tiles(std::size_t n, const std::vector<IndexPos>& offsets,
+                       const std::vector<std::uint32_t>& cell);
 
     SubstrateConfig config_;
     IndexTable*     table_ = nullptr;  ///< Non-owning; prepared at load time.
+    BinaryColumnStore* store_ = nullptr;  ///< Set only for the out-of-core build.
     bool            built_ = false;
     KdTree          tree_;             ///< Node 0 is the root; nodes 1..G are tiles.
 
@@ -67,6 +82,7 @@ private:
     std::uint32_t         tiles_ = 1;  ///< G = k_^dims_.
     std::vector<double>   lo_;         ///< Per-axis domain low.
     std::vector<double>   width_;      ///< Per-axis tile width.
+    std::vector<double>   inv_width_;  ///< 1/width_ (0 for a degenerate axis).
     HyperRect             domain_;     ///< Root bounds.
     std::vector<PartitionId> owner_;   ///< RowId -> tile PartitionId (1 + flat cell).
 };

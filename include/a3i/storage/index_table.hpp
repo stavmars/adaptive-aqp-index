@@ -43,6 +43,10 @@ public:
                                  std::span<double>)>& read_chunk,
         std::size_t chunk_rows = std::size_t{1} << 20);
 
+    /// An empty table over `dimensions` axes (no rows). Its buffers are sized
+    /// later by `scatter_grouped_from_reader`.
+    static IndexTable empty(DimensionId dimensions);
+
     /// Low-level constructor. `points` is the interleaved AoS buffer
     /// (length must equal `dimensions * row_ids.size()`); `row_ids`
     /// gives the base-table row id for each point.
@@ -83,6 +87,22 @@ public:
     /// buffers, which is released on return.
     std::vector<IndexPos> reorder_by_key(std::span<const std::uint32_t> key,
                                          std::size_t num_keys);
+
+    /// Populate this table in grouped order directly from a dimension reader,
+    /// without ever holding a second full-size point buffer. `cell[pos]` is the
+    /// group of base-table row `pos` (size N); `offsets` is its prefix sum
+    /// (size groups+1, `offsets[g]` starts group g, `offsets.back() == N`). The
+    /// dimension columns are streamed once via `read_chunk` (same contract as
+    /// `from_dimension_reader`) and each row is scattered to the next free slot
+    /// of its group, yielding the same layout as `reorder_by_key` -- groups
+    /// contiguous in ascending order, stable within a group. `points_`/`row_ids_`
+    /// are sized to N here; any existing contents are replaced.
+    void scatter_grouped_from_reader(
+        std::span<const std::uint32_t> cell,
+        std::span<const IndexPos> offsets,
+        const std::function<void(DimensionId, std::size_t, std::size_t,
+                                 std::span<double>)>& read_chunk,
+        std::size_t chunk_rows = std::size_t{1} << 20);
 
     /// Mutable spans for in-place permutation by the grid build and the
     /// cracking algorithm. Sized `size()*dimensions()` and `size()`.

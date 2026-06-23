@@ -41,6 +41,8 @@
 
 namespace a3i {
 
+class BinaryColumnStore;
+
 class AdaptiveAccessPath {
 public:
     virtual ~AdaptiveAccessPath() = default;
@@ -116,6 +118,18 @@ public:
     /// valid after `ensure_built()`. Returns nullptr when not available, in
     /// which case the caller derives the mapping by walking partition ranges.
     virtual const std::vector<PartitionId>* row_owner_map() const { return nullptr; }
+
+    /// True iff the substrate can construct its partitioned table directly from
+    /// the store's dimension columns, so the caller hands it the resident
+    /// columns and an empty table instead of pre-building one. This avoids ever
+    /// holding a second full copy of the dimensions; defaults to the
+    /// pre-built-table path.
+    virtual bool builds_table_from_dimension_store() const { return false; }
+
+    /// Provide the store whose resident dimension columns this substrate may
+    /// consume during `ensure_built()` when
+    /// `builds_table_from_dimension_store()` is honored. A no-op otherwise.
+    virtual void set_dimension_store(BinaryColumnStore* /*store*/) {}
 };
 
 }  // namespace a3i

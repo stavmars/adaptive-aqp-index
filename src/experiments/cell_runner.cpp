@@ -289,10 +289,31 @@ CellReport run_cell(const CellConfig& config) {
         selected.reserve(nm);
         for (std::size_t i = 0; i < nm; ++i) selected.push_back(static_cast<MeasureId>(i));
     }
-    // The scan oracle reads dimensions resident; the engine path builds its own
-    // table and reads each dimension once, so it needs no resident copy.
+    // Create the substrate first so its construction strategy can decide how the
+    // dimensions are loaded. A substrate that builds its table directly from the
+    // dimension columns reads them resident and releases them after
+    // partitioning, so the original-order copy is never duplicated; otherwise
+    // the table is built from a single non-resident streaming pass. The scan
+    // oracle reads the dimensions resident.
+    std::unique_ptr<AdaptiveAccessPath> substrate;
+    if (!spec.is_scan) {
+        SubstrateConfig scfg;
+        scfg.partition_size           = config.partition_size;
+        scfg.stochastic_cracking      = config.stochastic_cracking;
+        scfg.partitions_per_dimension = config.partitions_per_dimension;
+        // Size the index to the observed data extent (per-dimension min/max),
+        // not the declared domain; the declared domain is the workload's.
+        scfg.data_bounds.dims.reserve(manifest.dimensions.size());
+        for (const auto& dim : manifest.dimensions) {
+            scfg.data_bounds.dims.push_back(Range{dim.min, dim.max});
+        }
+        substrate = SubstrateFactory::instance().create(spec.substrate_id, scfg);
+    }
+    const bool build_table_from_store =
+        substrate && substrate->builds_table_from_dimension_store();
+
     BinaryColumnStore store(config.manifest_path, selected, config.measure_storage,
-                            /*load_dims_resident=*/spec.is_scan);
+                            /*load_dims_resident=*/spec.is_scan || build_table_from_store);
     const std::size_t served = store.measure_count();
 
     DatasetSchema schema;
@@ -311,33 +332,29 @@ CellReport run_cell(const CellConfig& config) {
     std::size_t to_run = wl.rects.size();
     if (config.max_queries != 0 && config.max_queries < to_run) to_run = config.max_queries;
 
-    // The engine path needs an in-memory point table and a substrate; the scan
-    // oracle needs neither. `table` is declared before `engine` so it outlives
-    // the engine that views it.
-    std::unique_ptr<AdaptiveAccessPath> substrate;
-    std::optional<IndexTable>           table;
-    std::unique_ptr<QueryEngine>        engine;
+    // The engine path needs an in-memory point table; the scan oracle needs
+    // neither table nor substrate. `table` is declared before `engine` so it
+    // outlives the engine that views it.
+    std::optional<IndexTable>    table;
+    std::unique_ptr<QueryEngine> engine;
     double init_ms = 0.0;
     if (!spec.is_scan) {
-        // Interleave the dimensions into the point table by streaming the
-        // columns in blocks, so the table is the only full-size dimension copy.
-        table = IndexTable::from_dimension_reader(
-            static_cast<DimensionId>(d), store.row_count(),
-            [&](DimensionId axis, std::size_t off, std::size_t count,
-                std::span<double> out) {
-                store.read_dimension_chunk(axis, off, count, out);
-            });
-        SubstrateConfig scfg;
-        scfg.partition_size      = config.partition_size;
-        scfg.stochastic_cracking = config.stochastic_cracking;
-        scfg.partitions_per_dimension = config.partitions_per_dimension;
-        // Size the index to the observed data extent (per-dimension min/max),
-        // not the declared domain; the declared domain is the workload's.
-        scfg.data_bounds.dims.reserve(manifest.dimensions.size());
-        for (const auto& dim : manifest.dimensions) {
-            scfg.data_bounds.dims.push_back(Range{dim.min, dim.max});
+        if (build_table_from_store) {
+            // Out-of-core: give the substrate the resident dimensions and an
+            // empty table; it tiles from the columns, releases them, and scatters
+            // the table straight into final order, never copying the columns.
+            table = IndexTable::empty(static_cast<DimensionId>(d));
+            substrate->set_dimension_store(&store);
+        } else {
+            // Interleave the dimensions into the point table by streaming the
+            // columns in blocks, so the table is the only full-size dimension copy.
+            table = IndexTable::from_dimension_reader(
+                static_cast<DimensionId>(d), store.row_count(),
+                [&](DimensionId axis, std::size_t off, std::size_t count,
+                    std::span<double> out) {
+                    store.read_dimension_chunk(axis, off, count, out);
+                });
         }
-        substrate = SubstrateFactory::instance().create(spec.substrate_id, scfg);
         substrate->prepare(*table);
         EngineConfig ecfg = behavior_config(spec.behavior);
         ecfg.sort_gather_by_row_id = config.sort_gather_by_row_id;
