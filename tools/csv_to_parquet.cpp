@@ -18,7 +18,7 @@ void print_usage(std::ostream& os) {
     os <<
 "Usage: csv_to_parquet --input <csv> --output <parquet>\n"
 "                      [--has-header] [--delimiter <ch>] [--null-string <s>]\n"
-"                      [--overwrite]\n"
+"                      [--timestamp-format <fmt>]... [--overwrite]\n"
 "\n"
 "Converts a delimited text file to a typed Parquet file. Column types\n"
 "are inferred (integers, doubles, booleans, timestamps, strings). No filtering\n"
@@ -31,10 +31,12 @@ void print_usage(std::ostream& os) {
 "\n"
 "--delimiter accepts a single char, or 'tab'/'\\t' for TSV.\n"
 "--null-string marks an extra token as null (empty fields are always null).\n"
+"--timestamp-format adds a strptime pattern for timestamp inference; repeat it\n"
+"  to cover a column whose rows mix formats (ISO8601 is always tried too).\n"
 "\n"
 "Example:\n"
 "  csv_to_parquet --input /data/raw/taxi.csv --output /data/parquet/taxi.parquet \\\n"
-"     --has-header --delimiter ,\n";
+"     --has-header --delimiter , --timestamp-format '%m/%d/%Y %I:%M:%S %p'\n";
 }
 
 bool eat_flag(int& i, int argc, char** argv, std::string_view name) {
@@ -70,6 +72,7 @@ int main(int argc, char** argv) try {
         if (eat_kv(i, argc, argv, "--output",      val)) { output = val; continue; }
         if (eat_kv(i, argc, argv, "--delimiter",   val)) { delimiter_str = val; continue; }
         if (eat_kv(i, argc, argv, "--null-string", val)) { opts.null_string = val; continue; }
+        if (eat_kv(i, argc, argv, "--timestamp-format", val)) { opts.timestamp_formats.push_back(val); continue; }
         if (eat_flag(i, argc, argv, "--has-header")) { opts.has_header = true; continue; }
         if (eat_flag(i, argc, argv, "--overwrite"))  { opts.overwrite  = true; continue; }
         throw std::runtime_error("unrecognized argument: " + std::string(argv[i]));

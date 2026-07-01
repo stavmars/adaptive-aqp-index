@@ -159,6 +159,54 @@ TEST(CsvToParquet, TabDelimited) {
     EXPECT_EQ(b->Value(1), 4);
 }
 
+// A datetime column whose rows mix two formats infers as a timestamp when a
+// strptime pattern is supplied for the non-ISO rows (ISO8601 is always tried).
+TEST(CsvToParquet, MixedTimestampFormatsInferTimestamp) {
+    TempDir tmp;
+    const auto csv = tmp / "in.csv";
+    write_text(csv,
+        "ts\n"
+        "12/01/2013 02:15:00 PM\n"   // US slash / 12h
+        "2014-12-25 23:27:36\n");    // ISO8601
+
+    a3i::CsvToParquetOptions opts;
+    opts.input_path  = csv;
+    opts.output_path = tmp / "out.parquet";
+    opts.has_header  = true;
+    opts.overwrite   = true;
+    opts.timestamp_formats = {"%m/%d/%Y %I:%M:%S %p"};
+    const auto rep = a3i::csv_to_parquet(opts);
+    EXPECT_EQ(rep.rows, 2u);
+
+    auto table = read_parquet(opts.output_path);
+    ASSERT_EQ(table->num_columns(), 1);
+    ASSERT_EQ(table->num_rows(), 2);
+    EXPECT_EQ(table->schema()->field(0)->type()->id(), arrow::Type::TIMESTAMP);
+    EXPECT_FALSE(table->column(0)->chunk(0)->IsNull(0));
+    EXPECT_FALSE(table->column(0)->chunk(0)->IsNull(1));
+}
+
+// Without the extra pattern the same mixed column falls back to string.
+TEST(CsvToParquet, MixedTimestampWithoutFormatFallsBackToString) {
+    TempDir tmp;
+    const auto csv = tmp / "in.csv";
+    write_text(csv,
+        "ts\n"
+        "12/01/2013 02:15:00 PM\n"
+        "2014-12-25 23:27:36\n");
+
+    a3i::CsvToParquetOptions opts;
+    opts.input_path  = csv;
+    opts.output_path = tmp / "out.parquet";
+    opts.has_header  = true;
+    opts.overwrite   = true;
+    const auto rep = a3i::csv_to_parquet(opts);
+    EXPECT_EQ(rep.rows, 2u);
+
+    auto table = read_parquet(opts.output_path);
+    EXPECT_EQ(table->schema()->field(0)->type()->id(), arrow::Type::STRING);
+}
+
 // Writing onto an existing file requires the overwrite flag.
 TEST(CsvToParquet, OverwriteGuard) {
     TempDir tmp;

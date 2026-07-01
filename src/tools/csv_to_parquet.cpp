@@ -8,6 +8,7 @@
 #include <arrow/api.h>
 #include <arrow/csv/api.h>
 #include <arrow/io/api.h>
+#include <arrow/util/value_parsing.h>
 #include <parquet/arrow/writer.h>
 
 namespace a3i {
@@ -76,6 +77,17 @@ CsvToParquetReport csv_to_parquet(const CsvToParquetOptions& opts) {
     convert_opts.strings_can_be_null = true;
     if (!opts.null_string.empty()) {
         convert_opts.null_values.push_back(opts.null_string);
+    }
+    // Register the caller's strptime patterns (tried in order) followed by
+    // ISO8601, so a column whose rows mix several datetime formats still infers
+    // as a timestamp. Left untouched, timestamp_parsers is empty and the reader
+    // applies its default ISO8601-only inference.
+    if (!opts.timestamp_formats.empty()) {
+        for (const auto& fmt : opts.timestamp_formats) {
+            convert_opts.timestamp_parsers.push_back(
+                arrow::TimestampParser::MakeStrptime(fmt));
+        }
+        convert_opts.timestamp_parsers.push_back(arrow::TimestampParser::MakeISO8601());
     }
 
     // Read the CSV in bounded record batches instead of materializing the whole

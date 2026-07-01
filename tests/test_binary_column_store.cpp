@@ -57,7 +57,8 @@ void write_text(const fs::path& p, std::string_view content) {
 // Run the one-off CSV -> Parquet step so the converter (which now
 // reads Parquet) can consume a tiny text fixture. Returns the Parquet path.
 fs::path to_parquet(const fs::path& csv, bool has_header, char delimiter = ',',
-                    const std::string& null_string = "") {
+                    const std::string& null_string = "",
+                    std::vector<std::string> timestamp_formats = {}) {
     fs::path pq = csv;
     pq.replace_extension(".parquet");
     a3i::CsvToParquetOptions po;
@@ -66,6 +67,7 @@ fs::path to_parquet(const fs::path& csv, bool has_header, char delimiter = ',',
     po.has_header  = has_header;
     po.delimiter   = delimiter;
     po.null_string = null_string;
+    po.timestamp_formats = std::move(timestamp_formats);
     po.overwrite   = true;
     a3i::csv_to_parquet(po);
     return pq;
@@ -191,6 +193,36 @@ TEST(BinaryColumnStore, NonResidentDimensionsReadOnDemand) {
     store.read_dimension_chunk(0, 1, 2, std::span<double>(tail.data(), tail.size()));
     EXPECT_DOUBLE_EQ(tail[0], -73.96);
     EXPECT_DOUBLE_EQ(tail[1], -73.97);
+}
+
+// A timestamp column is stored as Unix epoch seconds, so it can serve as a
+// numeric dimension. The two rows exercise both the ISO8601 and the extra
+// strptime parser feeding the same column.
+TEST(BinaryColumnStore, TimestampDimensionBecomesEpochSeconds) {
+    TempDir tmp;
+    const auto csv = tmp / "events.csv";
+    write_text(csv,
+        "t,v\n"
+        "2013-01-01 00:00:00,1.0\n"        // ISO8601      -> epoch 1356998400
+        "01/01/2013 01:00:00 AM,2.0\n");   // slash/AM-PM  -> epoch 1357002000
+
+    a3i::ConvertOptions opts;
+    opts.input_parquet = to_parquet(csv, /*has_header=*/true, ',', "",
+                                    {"%m/%d/%Y %I:%M:%S %p"});
+    opts.output_dir = tmp / "prep";
+    opts.dataset_id = "events_tiny";
+    // Epoch seconds are ~1.357e9; bounds only need to contain them.
+    opts.dimensions = {{"t", 0.0, 2.0e9}};
+    opts.measures = {"v"};
+
+    const auto rep = a3i::run_parquet_to_columns(opts);
+    ASSERT_EQ(rep.rows_written, 2u);
+
+    a3i::BinaryColumnStore store(rep.manifest_path);
+    auto t = store.dimension_column(0);
+    ASSERT_EQ(t.size(), 2u);
+    EXPECT_DOUBLE_EQ(t[0], 1356998400.0);   // 2013-01-01 00:00:00 UTC
+    EXPECT_DOUBLE_EQ(t[1], 1357002000.0);   // + 1 hour
 }
 
 // --- Headerless synthesized positional column names ---------------------

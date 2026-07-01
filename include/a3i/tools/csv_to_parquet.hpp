@@ -32,6 +32,13 @@ struct CsvToParquetOptions {
     char        delimiter  = ',';       ///< Field separator (',' or '\t').
     std::string null_string;            ///< Extra null sentinel; empty fields are always null.
     bool        overwrite  = false;     ///< Replace an existing output_path.
+    /// Extra strptime patterns to recognize timestamp columns, tried in order
+    /// (ISO8601 is always tried as well). A column typed as a timestamp only
+    /// when every value matches one of these or ISO8601; this lets a column
+    /// whose rows mix several datetime formats still infer as a timestamp
+    /// instead of falling back to string. Empty keeps the default ISO8601-only
+    /// inference.
+    std::vector<std::string> timestamp_formats;
 };
 
 struct CsvToParquetReport {
@@ -41,7 +48,8 @@ struct CsvToParquetReport {
 
 /// Convert a delimited text file to a typed Parquet file. Column
 /// types are inferred by the CSV reader (integers, doubles, booleans,
-/// timestamps, strings). Throws std::runtime_error on I/O or parse errors,
+/// timestamps, strings); extra timestamp patterns can be supplied via
+/// opts.timestamp_formats. Throws std::runtime_error on I/O or parse errors,
 /// std::invalid_argument on malformed options.
 CsvToParquetReport csv_to_parquet(const CsvToParquetOptions& opts);
 

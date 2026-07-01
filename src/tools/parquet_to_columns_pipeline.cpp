@@ -61,10 +61,11 @@ bool parse_double(std::string_view sv, double& out) {
 }
 
 // Append one Arrow array to a double column with an explicit null mask.
-// Integers, floats and booleans convert numerically; strings are parsed
-// (unparseable -> null); nulls are recorded in the mask. Unsupported types are
-// a fatal error. Called once per needed column per streamed batch, so peak
-// memory stays bounded by the batch size rather than the whole file.
+// Integers, floats and booleans convert numerically; timestamps become Unix
+// epoch seconds; strings are parsed (unparseable -> null); nulls are recorded
+// in the mask. Unsupported types are a fatal error. Called once per needed
+// column per streamed batch, so peak memory stays bounded by the batch size
+// rather than the whole file.
 void append_array_as_double(const arrow::Array& chunk, const std::string& name,
                             DoubleColumn& col) {
     auto push_null = [&] { col.value.push_back(kNaN); col.is_null.push_back(1); };
@@ -100,6 +101,26 @@ void append_array_as_double(const arrow::Array& chunk, const std::string& name,
             const auto& a = static_cast<const arrow::BooleanArray&>(chunk);
             for (std::int64_t i = 0; i < len; ++i)
                 a.IsNull(i) ? push_null() : push_val(a.Value(i) ? 1.0 : 0.0);
+            break;
+        }
+        case arrow::Type::TIMESTAMP: {
+            // Store as Unix epoch seconds, a continuous axis the double-typed
+            // columns index directly (a range predicate is then a plain [t0,t1]).
+            // Divide by the unit's integer scale rather than multiplying by a
+            // fractional one so whole-second values stay exact. Second- and
+            // millisecond-epoch magnitudes are well within a double's exact
+            // integer range; only sub-microsecond inputs lose resolution.
+            const auto& a = static_cast<const arrow::TimestampArray&>(chunk);
+            double scale = 1.0;  // raw units per second
+            switch (static_cast<const arrow::TimestampType&>(*a.type()).unit()) {
+                case arrow::TimeUnit::SECOND: scale = 1.0;  break;
+                case arrow::TimeUnit::MILLI:  scale = 1e3;  break;
+                case arrow::TimeUnit::MICRO:  scale = 1e6;  break;
+                case arrow::TimeUnit::NANO:   scale = 1e9;  break;
+            }
+            for (std::int64_t i = 0; i < len; ++i)
+                a.IsNull(i) ? push_null()
+                            : push_val(static_cast<double>(a.Value(i)) / scale);
             break;
         }
         case arrow::Type::STRING: case arrow::Type::LARGE_STRING: {
