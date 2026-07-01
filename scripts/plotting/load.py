@@ -169,6 +169,13 @@ def _cell_rows(qpath: Path) -> list[dict]:
     return out
 
 
+def _ident_token(v):
+    """Fold NaN to None for the identity tuple. A CELL_KEYS value can be NaN
+    (e.g. outlier_budget on an exact run), and NaN != NaN would make two
+    otherwise-identical cells look distinct, so duplicates would slip through."""
+    return None if isinstance(v, float) and v != v else v
+
+
 def load_frame(results_root, datasets=None, workloads=None) -> pd.DataFrame:
     """Discover + validate every result cell into one tidy long frame.
 
@@ -184,7 +191,7 @@ def load_frame(results_root, datasets=None, workloads=None) -> pd.DataFrame:
         if workloads and p[-4] not in workloads:
             continue
         cell_rows = _cell_rows(qpath)
-        ident = tuple(cell_rows[0][k] for k in CELL_KEYS)
+        ident = tuple(_ident_token(cell_rows[0][k]) for k in CELL_KEYS)
         if ident in seen:
             raise LoadError(f"duplicate cell-run {ident} (second file {qpath})")
         seen.add(ident)

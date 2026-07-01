@@ -33,6 +33,7 @@ def _rows(method, substrate, nm, eb, exact):
         for agg, meas, est in (("SUM", "m0", 10.0 + q), ("COUNT_STAR", "*", 100.0)):
             row = dict(dataset="d", workload="w", method=method, substrate=substrate,
                        nm=nm, mem="inmem", partition_size=1024, n=3, eb=eb, run_id=0,
+                       outlier_budget=float("nan") if exact else 0.0,
                        query_ordinal=q, aggregate=agg, measure=meas,
                        estimate=est, ci_low=est, ci_high=est, exact=exact,
                        init_ms=0.0)
