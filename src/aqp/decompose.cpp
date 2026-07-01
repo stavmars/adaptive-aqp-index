@@ -29,8 +29,13 @@ struct Descender {
             const MeasureSummary* s = store.find(pid, m);
             result.decomposition.exact_contributors.push_back(
                 {pid, m, s, retained_ancestor});
-            result.exact_bucket.sum_by_measure[mid] += s->non_nan.sum();
-            result.exact_bucket.count_by_measure[mid] += s->non_nan.non_nan_count;
+            // A complete summary contributes its sampled body moments plus any
+            // banked held-out rows (zero on a fully materialized summary, where
+            // the held-out rows are already inside non_nan).
+            result.exact_bucket.sum_by_measure[mid] +=
+                s->non_nan.sum() + s->outlier_sum;
+            result.exact_bucket.count_by_measure[mid] +=
+                s->non_nan.non_nan_count + s->outlier_count;
         }
         result.total_count += population;
         ++result.frontier_partitions;
@@ -46,22 +51,58 @@ struct Descender {
         // (freshly cracked or never sampled) starts from scratch.
         const MeasureSummary* prior = store.find(pid, 0);
         const bool sampled_before = prior != nullptr && prior->sampled_rows > 0;
+
+        // Hold out this partition's flagged rows from the sampling universe and
+        // route them to the add-back; the sample then expands over the body
+        // only. The excluded bitset is allocated only when flagged rows exist.
+        // Locate this partition's held-out (flagged) rows by slicing the global
+        // flag column over its range. They are removed from the sampling
+        // universe via `excluded`; their values are contributed exactly -- on
+        // the persist path banked into the summary (read once in a round, reused
+        // thereafter), on the non-persist path added back per query.
+        std::shared_ptr<PositionBitset> excluded;
+        std::vector<RowId> held_rows;
+        if (table.flags_enabled()) {
+            table.for_each_flagged_in_range(
+                pv.begin, pv.end, [&](IndexPos pos) {
+                    if (!excluded) {
+                        excluded = std::make_shared<PositionBitset>(population);
+                    }
+                    excluded->set(static_cast<IndexPos>(pos - pv.begin));
+                    held_rows.push_back(table.row_id(pos));
+                });
+        }
+        const std::uint64_t outlier_rows = excluded ? excluded->count() : 0;
+        const std::uint64_t body = population - outlier_rows;
+        std::shared_ptr<const PositionBitset> excluded_const = std::move(excluded);
+
         if (persist) {
             store.ensure_partition(pid, measure_count);
             for (std::size_t mid = 0; mid < measure_count; ++mid) {
                 const auto m = static_cast<MeasureId>(mid);
                 MeasureSummary& sm = store.get_or_create(pid, m, population);
+                sm.outlier_rows = outlier_rows;
+                // If a prior query already banked these rows, contribute them
+                // now from the bank (no read). The round-fold only materializes
+                // when outliers_materialized is still false, so the bank-now and
+                // bank-in-round paths are mutually exclusive within a query.
+                if (sm.outliers_materialized) {
+                    result.exact_bucket.sum_by_measure[mid] += sm.outlier_sum;
+                    result.exact_bucket.count_by_measure[mid] += sm.outlier_count;
+                }
                 result.decomposition.reusable_strata.push_back(
-                    {pid, m, pv.begin, pv.end, population, sm.tracker});
+                    {pid, m, pv.begin, pv.end, body, sm.tracker, excluded_const});
             }
         } else {
-            // No persistence: one fresh per-query tracker shared by the
-            // partition's measures, never stored.
+            // No persistent state to bank into: one fresh per-query tracker
+            // shared by the partition's measures, and the held-out rows are
+            // contributed per query via the add-back.
+            for (RowId r : held_rows) result.addback_rows.push_back(r);
             auto tracker = std::make_shared<SampleTracker>(population);
             for (std::size_t mid = 0; mid < measure_count; ++mid) {
                 result.decomposition.reusable_strata.push_back(
                     {pid, static_cast<MeasureId>(mid), pv.begin, pv.end,
-                     population, tracker});
+                     body, tracker, excluded_const});
             }
         }
         result.total_count += population;
@@ -75,9 +116,17 @@ struct Descender {
     void emit_query_local(PartitionId pid, const PartitionView& pv,
                           std::uint64_t population) {
         auto qualifying = std::make_shared<PositionBitset>(population);
+        const bool flags = table.flags_enabled();
+        std::uint64_t excluded_qualifying = 0;
         for (std::uint64_t p = 0; p < population; ++p) {
             const auto pos = static_cast<IndexPos>(pv.begin + p);
-            if (q.contains_point(table.point(pos))) {
+            if (!q.contains_point(table.point(pos))) continue;
+            // A qualifying flagged row is held out of the sample and contributed
+            // exactly via the add-back; it still counts toward COUNT(*).
+            if (flags && table.is_flagged(pos)) {
+                result.addback_rows.push_back(table.row_id(pos));
+                ++excluded_qualifying;
+            } else {
                 qualifying->set(static_cast<IndexPos>(p));
             }
         }
@@ -88,7 +137,7 @@ struct Descender {
                 {pid, static_cast<MeasureId>(mid), pv.begin, shared,
                  qualifying_count});
         }
-        result.total_count += qualifying_count;
+        result.total_count += qualifying_count + excluded_qualifying;
         ++result.frontier_partitions;
         ++result.query_local_partitions;
     }

@@ -74,8 +74,55 @@ public:
     /// Base-table row id at `pos`.
     RowId row_id(IndexPos pos) const noexcept { return row_ids_[pos]; }
 
-    /// Swap two points in place: the whole d-dimensional block and the
-    /// row_id move together (keeps dimensions and row_ids aligned).
+    /// True iff a flag column is installed (only when a non-zero budget asked
+    /// for one). When absent every flag query is a cheap no-op.
+    bool flags_enabled() const noexcept { return !flag_words_.empty(); }
+
+    /// True iff the row currently at `pos` is flagged. False when no flag
+    /// column is installed.
+    bool is_flagged(IndexPos pos) const noexcept {
+        if (flag_words_.empty()) return false;
+        return (flag_words_[static_cast<std::size_t>(pos) / 64] >>
+                (static_cast<std::size_t>(pos) % 64)) &
+               std::uint64_t{1};
+    }
+
+    /// Invoke `fn(IndexPos)` for every flagged position in [lo, hi) in
+    /// ascending order. Word-scans the range and skips empty words, so the cost
+    /// is proportional to the range in words plus the flagged positions found.
+    template <typename F>
+    void for_each_flagged_in_range(IndexPos lo, IndexPos hi, F&& fn) const {
+        if (flag_words_.empty() || hi <= lo) return;
+        const std::size_t w0 = static_cast<std::size_t>(lo) / 64;
+        const std::size_t w1 = static_cast<std::size_t>(hi - 1) / 64;
+        for (std::size_t w = w0; w <= w1; ++w) {
+            std::uint64_t bits = flag_words_[w];
+            if (w == w0) {
+                bits &= ~std::uint64_t{0} << (static_cast<std::size_t>(lo) % 64);
+            }
+            if (w == w1) {
+                const unsigned top =
+                    static_cast<unsigned>(static_cast<std::size_t>(hi - 1) % 64);
+                bits &= (top == 63) ? ~std::uint64_t{0}
+                                    : ((std::uint64_t{1} << (top + 1)) - 1);
+            }
+            while (bits) {
+                const unsigned b = static_cast<unsigned>(__builtin_ctzll(bits));
+                fn(static_cast<IndexPos>(w * 64 + b));
+                bits &= bits - 1;
+            }
+        }
+    }
+
+    /// Install the flag column: mark exactly the positions whose current row_id
+    /// appears in `flagged_rowids`. Sizes the column to size() and replaces any
+    /// prior column. Call once after the table is in its final order; the flag
+    /// then rides every later swap_positions.
+    void set_flags_by_rowid(std::span<const RowId> flagged_rowids);
+
+    /// Swap two points in place: the whole d-dimensional block, the row_id, and
+    /// the flag bit (when installed) move together so dimensions, row_ids, and
+    /// flags stay aligned.
     void swap_positions(IndexPos a, IndexPos b) noexcept;
 
     /// Reorder points and row_ids out of place so positions sharing a key value
@@ -116,6 +163,7 @@ public:
 private:
     std::vector<double> points_;   // points_[pos*d + axis]
     std::vector<RowId>  row_ids_;  // row_ids_[pos]
+    std::vector<std::uint64_t> flag_words_;  // 1 bit/pos; empty when not installed
     DimensionId dimensions_;
 };
 

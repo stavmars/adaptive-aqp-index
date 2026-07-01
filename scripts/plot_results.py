@@ -211,6 +211,9 @@ def main(argv=None) -> int:
     ap.add_argument("--mem", default=figures.PIN_DEFAULTS["mem"],
                     help="memory mode the comparison figures pin to; in-mem and "
                          f"capped runs are not comparable (default {figures.PIN_DEFAULTS['mem']})")
+    ap.add_argument("--outlier-budget", type=float, default=None,
+                    help="pin ALL datasets to this outlier budget; default is the "
+                         "per-dataset map (ebird on, others off) in figures.py")
     ap.add_argument("--strict", action="store_true",
                     help="fail if a declared figure's required cells are absent")
     ap.add_argument("--per-query-head", type=int, default=None,
@@ -225,6 +228,8 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     figures.PER_QUERY_HEAD = args.per_query_head
+    if args.outlier_budget is not None:
+        figures.OUTLIER_BUDGET_PIN = args.outlier_budget  # global pin overrides the map
     render.LEGEND = args.legend
     render.TITLES = args.title == "on"
 

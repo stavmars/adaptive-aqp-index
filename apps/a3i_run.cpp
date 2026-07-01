@@ -22,6 +22,7 @@ void print_usage(std::ostream& os) {
 "               [--dataset <id>] [--workload-name <id>]\n"
 "               [--num-measures <k>] [--error-bound <eps>] [--confidence <c>]\n"
 "               [--partition-size <N>] [--partitions-per-dimension <N>]\n"
+"               [--outlier-budget <fraction>]\n"
 "               [--stochastic-cracking] [--no-sort-gather] [--in-memory]\n"
 "               [--run-id <R>] [--max-queries <N>] [--cold true|false]\n"
 "\n"
@@ -97,7 +98,7 @@ int main(int argc, char** argv) try {
 
     a3i::CellConfig cfg;
     std::string manifest, workload, qresults, runmeta;
-    std::string nm_str, eb_str, conf_str, psize_str, run_str, maxq_str, cold_str, ppd_str;
+    std::string nm_str, eb_str, conf_str, psize_str, run_str, maxq_str, cold_str, ppd_str, ob_str;
 
     int i = 1;
     while (i < argc) {
@@ -114,6 +115,7 @@ int main(int argc, char** argv) try {
         if (eat_kv(i, argc, argv, "--confidence", val))           { conf_str = val; continue; }
         if (eat_kv(i, argc, argv, "--partition-size", val))       { psize_str = val; continue; }
         if (eat_kv(i, argc, argv, "--partitions-per-dimension", val)) { ppd_str = val; continue; }
+        if (eat_kv(i, argc, argv, "--outlier-budget", val))       { ob_str = val; continue; }
         if (eat_kv(i, argc, argv, "--run-id", val))               { run_str = val; continue; }
         if (eat_kv(i, argc, argv, "--max-queries", val))          { maxq_str = val; continue; }
         if (eat_kv(i, argc, argv, "--cold", val))                 { cold_str = val; continue; }
@@ -139,6 +141,7 @@ int main(int argc, char** argv) try {
     if (!conf_str.empty()) cfg.confidence           = std::stod(conf_str);
     if (!psize_str.empty()) cfg.partition_size = static_cast<std::uint32_t>(std::stoul(psize_str));
     if (!ppd_str.empty()) cfg.partitions_per_dimension = static_cast<std::uint32_t>(std::stoul(ppd_str));
+    if (!ob_str.empty())  cfg.outlier_budget_fraction = std::stod(ob_str);
     if (!run_str.empty())  cfg.run_id               = std::stoull(run_str);
     if (!maxq_str.empty()) cfg.max_queries          = std::stoull(maxq_str);
     if (!cold_str.empty()) cfg.cold                 = parse_bool(cold_str);

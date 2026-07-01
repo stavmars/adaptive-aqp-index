@@ -45,6 +45,7 @@ struct StratumCursor {
                                   // ordering is disabled at construction
     std::size_t        pos = 0;   // walk position into owned
     StratumTag         tag = 0;   // routes gathered values to accumulators
+    bool               is_outlier = false;  // held-out rows -> bank, not sample
 
     RowId peek() const { return owned[pos]; }
     void  advance() { ++pos; }
@@ -62,13 +63,16 @@ StratumCursor make_reusable_full_cursor(const IndexTable& table, IndexPos begin,
                                         bool sort_owned = true);
 
 /// Reusable stratum, sampled read: draws `count` new positions without
-/// replacement from [0, size) \ tracker, marks them in the tracker.
+/// replacement from [0, size) \ tracker \ excluded, marks them in the tracker.
+/// `excluded` (partition-local positions, or null) is removed from the universe
+/// so those rows are never drawn into the sample.
 StratumCursor make_reusable_sampled_cursor(const IndexTable& table,
                                            IndexPos begin, std::uint64_t size,
                                            SampleTracker& tracker,
                                            std::uint64_t count, Rng& rng,
                                            StratumTag tag,
-                                           bool sort_owned = true);
+                                           bool sort_owned = true,
+                                           const PositionBitset* excluded = nullptr);
 
 /// Query-local stratum, full read: reads every qualifying position and marks
 /// each in the query-local tracker. Qualifying positions are partition-local
@@ -88,6 +92,14 @@ StratumCursor make_query_local_sampled_cursor(
     SampleTracker& tracker, std::uint64_t count, Rng& rng, StratumTag tag,
     bool sort_owned = true);
 
+/// Held-out (outlier) rows of a reusable partition: the flagged positions in
+/// [begin, begin+size), looked up to row ids and sorted like any other cursor,
+/// marked `is_outlier` so the merge routes them to the bank rather than the
+/// sample. No tracker: these rows are read exactly once, never sampled.
+StratumCursor make_outlier_cursor(const IndexTable& table, IndexPos begin,
+                                  std::uint64_t size, StratumTag tag,
+                                  bool sort_owned = true);
+
 /// Min-heap k-way merge over cursors, interleaving their row ids by current
 /// head with the originating stratum tag alongside each id. When every cursor
 /// was built sorted the merged stream is globally ascending; with sorting
@@ -103,9 +115,11 @@ public:
     /// Pop up to ids_out.size() row ids into ids_out, with the matching tags in
     /// tags_out. The order matches the merge (ascending iff the cursors were
     /// built sorted). Returns the number popped. ids_out and tags_out must have
-    /// equal length.
+    /// equal length. If `is_outlier_out` is non-empty (then also equal length),
+    /// each popped row's originating-cursor is_outlier flag is written there.
     std::size_t next_chunk(std::span<RowId> ids_out,
-                           std::span<StratumTag> tags_out);
+                           std::span<StratumTag> tags_out,
+                           std::span<char> is_outlier_out = {});
 
 private:
     std::vector<StratumCursor*> heap_;  // min-heap keyed on peek()

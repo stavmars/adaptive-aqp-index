@@ -1,6 +1,7 @@
 #include "a3i/storage/index_table.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <limits>
 #include <numeric>
@@ -122,9 +123,19 @@ void IndexTable::scatter_grouped_from_reader(
     }
 
     // The final buffers are the only full-size point allocation. A per-group
-    // write cursor starts at each group's offset and advances as rows land.
+    // write cursor starts at each group's offset and advances as rows land. Any
+    // prior flag column is dropped (it must be installed after, in final order).
     points_.assign(n * dimensions_, 0.0);
     row_ids_.assign(n, RowId{0});
+    // This rebuilds the layout, so any position-keyed flag column is dropped.
+    // It is correct only because layout build runs strictly before the outlier
+    // flag column is installed (set_flags_by_rowid). Carrying flags through a
+    // wholesale layout rebuild is not supported; the only in-place mover that
+    // preserves them is swap_positions. Guard the ordering invariant.
+    assert(flag_words_.empty() &&
+           "scatter_grouped_from_reader must run before the outlier flag column "
+           "is installed (it does not carry flags); reinstall afterwards if not");
+    flag_words_.clear();
     std::vector<IndexPos> cursor(offsets.begin(), offsets.end() - 1);
 
     // Stream the columns in row blocks into one flat per-axis chunk buffer and
@@ -169,6 +180,29 @@ IndexTable::IndexTable(std::vector<double> points,
     }
 }
 
+void IndexTable::set_flags_by_rowid(std::span<const RowId> flagged_rowids) {
+    const std::size_t n = row_ids_.size();
+    // No flagged rows => install no column, so flags_enabled() stays false and the
+    // read path is identical to the disabled case (no all-zero column to scan).
+    if (flagged_rowids.empty() || n == 0) { flag_words_.clear(); return; }
+    flag_words_.assign((n + 63) / 64, 0);
+    // Transient row-id membership bitset, released on return; the position-keyed
+    // column is then derived in one pass and is the only persistent allocation.
+    std::vector<std::uint64_t> member((n + 63) / 64, 0);
+    for (RowId r : flagged_rowids) {
+        if (static_cast<std::size_t>(r) < n) {
+            member[static_cast<std::size_t>(r) / 64] |= std::uint64_t{1}
+                                                        << (static_cast<std::size_t>(r) % 64);
+        }
+    }
+    for (std::size_t pos = 0; pos < n; ++pos) {
+        const std::size_t r = static_cast<std::size_t>(row_ids_[pos]);
+        if ((member[r / 64] >> (r % 64)) & std::uint64_t{1}) {
+            flag_words_[pos / 64] |= std::uint64_t{1} << (pos % 64);
+        }
+    }
+}
+
 void IndexTable::swap_positions(IndexPos a, IndexPos b) noexcept {
     if (a == b) return;
     const std::size_t base_a = static_cast<std::size_t>(a) * dimensions_;
@@ -177,6 +211,21 @@ void IndexTable::swap_positions(IndexPos a, IndexPos b) noexcept {
         std::swap(points_[base_a + axis], points_[base_b + axis]);
     }
     std::swap(row_ids_[a], row_ids_[b]);
+    // Carry the flag bit so flag[pos] keeps tracking the row now at pos. Sparse,
+    // so the bits usually match and no write happens. INVARIANT: the flag column
+    // is position-keyed, so any operation that moves rows between positions
+    // after the column is installed must move their flag bits in lockstep (as
+    // here); a mover that omits this silently misattributes flags.
+    if (!flag_words_.empty()) {
+        const std::size_t ia = static_cast<std::size_t>(a);
+        const std::size_t ib = static_cast<std::size_t>(b);
+        const std::uint64_t fa = (flag_words_[ia / 64] >> (ia % 64)) & std::uint64_t{1};
+        const std::uint64_t fb = (flag_words_[ib / 64] >> (ib % 64)) & std::uint64_t{1};
+        if (fa != fb) {
+            flag_words_[ia / 64] ^= std::uint64_t{1} << (ia % 64);
+            flag_words_[ib / 64] ^= std::uint64_t{1} << (ib % 64);
+        }
+    }
 }
 
 std::vector<IndexPos> IndexTable::reorder_by_key(
@@ -218,6 +267,15 @@ std::vector<IndexPos> IndexTable::reorder_by_key(
 
     points_  = std::move(new_points);
     row_ids_ = std::move(new_row_ids);
+    // A reorder invalidates any position-keyed flag column; it must be
+    // (re)installed afterwards, in the final order. Today reorder runs strictly
+    // before the flag column is installed, so it is empty here; the assert
+    // guards against a future in-place reorder after install silently dropping
+    // the held-out marks (which would break body/outlier disjointness, since
+    // unlike swap_positions this path does not carry the flag bit).
+    assert(flag_words_.empty() &&
+           "reorder_by_key must run before the outlier flag column is installed");
+    flag_words_.clear();
     return offsets;
 }
 

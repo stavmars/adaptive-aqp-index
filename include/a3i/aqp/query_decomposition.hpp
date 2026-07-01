@@ -44,8 +44,14 @@ struct ReusableStratum {
     MeasureId     mid = 0;
     IndexPos      begin = 0;
     IndexPos      end   = 0;
+    // Body population: the partition's rows minus its excluded rows, so the
+    // expansion estimate scales the sample to the body only.
     std::uint64_t population_size = 0;
     std::shared_ptr<SampleTracker> tracker;  // persistent, shared by the partition's measures
+    // Partition-local positions removed from the sampling universe (their
+    // values are contributed exactly via the decomposition's add-back rows).
+    // Null when none. Shared across the partition's measures.
+    std::shared_ptr<const PositionBitset> excluded;
 };
 
 struct QueryLocalStratum {
@@ -88,6 +94,10 @@ struct ExactBucket {
 struct DecompositionResult {
     QueryDecomposition decomposition;
     ExactBucket        exact_bucket;
+    // Qualifying rows removed from the sampled strata; their measure values are
+    // gathered and folded into the exact bucket so they contribute exactly,
+    // with zero variance. Empty when no index is installed.
+    std::vector<RowId> addback_rows;
     std::uint64_t      total_count = 0;  // COUNT(*): all qualifying objects, incl. missing
     std::uint64_t      nodes_visited = 0;       // descent nodes classified (incl. dropped)
     std::uint64_t      partitions_refined = 0;   // boundary leaves cracked toward the query (>=1 cut each)

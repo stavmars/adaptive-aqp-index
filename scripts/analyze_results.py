@@ -35,7 +35,7 @@ def _row(sub, method):
     return None if r.empty else r.iloc[0]
 
 
-def diagnostics(sub, eb, nominal, dataset) -> list[dict]:
+def diagnostics(sub, eb, nominal, dataset, ob=0.0) -> list[dict]:
     """Expectation checks for one (dataset, workload) summary slice."""
     findings: list[dict] = []
 
@@ -132,7 +132,10 @@ def diagnostics(sub, eb, nominal, dataset) -> list[dict]:
     if have("kd_agg"):
         add("kd_agg has build init", g("kd_agg", "init_ms") > 0,
             f"{g('kd_agg','init_ms')/1e3:.1f}s", severity="WARN")
-    if have("a3i_akd"):
+    # a3i_akd is lazy (no up-front build) -- but only with the outlier index off.
+    # A positive budget pays one scoring sweep at init, so the "~no init"
+    # expectation applies at budget 0 only.
+    if have("a3i_akd") and ob == 0.0:
         add("a3i_akd ~no init", g("a3i_akd", "init_ms") < 100,
             f"{g('a3i_akd','init_ms'):.0f}ms", severity="WARN")
 
@@ -196,10 +199,11 @@ def main() -> int:
         return 0
 
     # Compare methods only within a comparable slice: every axis fixed except the
-    # method. Exact methods carry no eb (NaN) and join the slice at *every* eb;
-    # the approximate methods are taken one eb at a time. So the analysis runs
-    # once per (slice, eb) -- every error bound present is checked, no --eb needed
-    # (pass --eb only to restrict to one).
+    # method. Exact methods carry no eb and no outlier budget (both NaN) and join
+    # the slice at *every* eb and *every* budget as the baseline; the approximate
+    # methods are taken one (eb, budget) at a time. So the analysis runs once per
+    # (slice, eb, budget) -- every error bound and budget present is checked (pass
+    # --eb only to restrict the error bound).
     slice_keys = ["dataset", "workload", "nm", "mem", "partition_size", "n"]
     order = ["scan", "kd", "kd_agg", "akd", "akd_agg", "akd_sampling", "a3i_akd",
              "a3i_grid_akd"]
@@ -208,6 +212,10 @@ def main() -> int:
         ebs = [args.eb]
     else:
         ebs = sorted(frame.loc[frame["eb"].notna(), "eb"].unique().tolist()) or [0.01]
+    # Outlier budgets present among approximate runs (exact runs carry NaN and
+    # join every budget). 0.0 is a budget like any other -- the index turned off.
+    obs = sorted(frame.loc[frame["outlier_budget"].notna(),
+                           "outlier_budget"].unique().tolist()) or [0.0]
 
     all_versions = sorted(set(frame["engine_build_version"].dropna().tolist()))
     if len(all_versions) > 1:
@@ -218,59 +226,65 @@ def main() -> int:
     tot = {"PASS": 0, "WARN": 0, "FAIL": 0}
 
     for eb in ebs:
-        comparable = frame[frame["eb"].isna() | (frame["eb"] == eb)]
-        summ = aggregate.cost_cell_summary(comparable)
+        for ob in obs:
+            # Exact methods (NaN eb, NaN budget) join every (eb, budget) slice as
+            # the baseline; approximate methods join only at their own eb & budget.
+            comparable = frame[(frame["eb"].isna() | (frame["eb"] == eb))
+                               & (frame["outlier_budget"].isna()
+                                  | (frame["outlier_budget"] == ob))]
+            summ = aggregate.cost_cell_summary(comparable)
 
-        # Per-slice engine-build spread (a mixed slice is an unfair comparison).
-        slice_versions = (comparable.groupby(slice_keys, dropna=False)
-                          ["engine_build_version"]
-                          .agg(lambda s: sorted(set(s.dropna()))))
-        summaries.append(summ)
+            # Per-slice engine-build spread (a mixed slice is an unfair comparison).
+            slice_versions = (comparable.groupby(slice_keys, dropna=False)
+                              ["engine_build_version"]
+                              .agg(lambda s: sorted(set(s.dropna()))))
+            summaries.append(summ)
 
-        for keys, grp in summ.groupby(slice_keys, dropna=False):
-            ds, wl, nm, mem, psize, n = keys
-            # An eb context is only meaningful where an approximate method ran at
-            # it; an exact-only slice is already covered under its own eb.
-            if not grp["method"].isin(("a3i_akd", "akd_sampling", "a3i_grid_akd")).any():
-                continue
-            sub = grp.set_index("method").reindex(
-                [m for m in order if m in grp["method"].values]).reset_index()
-            print(f"\n=== {ds} / {wl}  (nm={nm}, eb={eb:g}, "
-                  f"partition_size={psize}, mem={mem}, n={n}) ===")
-            print(f"  {'method':14}{'init_s':>8}{'cum_s':>9}{'reads':>15}"
-                  f"{'p50_ms':>9}{'p95_ms':>9}{'speedup':>8}{'scan%':>7}")
-            for _, r in sub.iterrows():
-                sp = "" if r["speedup_vs_scan"] != r["speedup_vs_scan"] else f"{r['speedup_vs_scan']:.0f}x"
-                # scan% = share of queries served through the sequential-scan
-                # path; blank for an in-memory cell.
-                scf = r.get("scan_frac", float("nan"))
-                sc = "" if scf != scf else f"{scf*100:.0f}%"
-                print(f"  {r['method']:14}{r['init_ms']/1e3:8.1f}{r['cum_ms']/1e3:9.1f}"
-                      f"{r['total_reads']:15,.0f}{r['lat_p50']:9.1f}{r['lat_p95']:9.1f}"
-                      f"{sp:>8}{sc:>7}")
-            fs = diagnostics(sub, eb, args.confidence, ds)
-            vers = list(slice_versions.get(keys, []))
-            if len(vers) > 1:
-                fs.append({"check": "single engine version",
-                           "status": "FAIL" if args.strict_version else "WARN",
-                           "detail": f"slice mixes engine builds {vers}"})
-            for f in fs:
-                tot[f["status"]] += 1
-                f.update(dataset=ds, workload=wl, nm=nm, mem=mem,
-                         partition_size=psize, n=n, eb=eb)
-                all_findings.append(f)
-                if f["status"] != "PASS":
-                    print(f"     [{f['status']}] {f['check']} "
-                          f"(nm={nm}, eb={eb:g}): {f['detail']}")
+            for keys, grp in summ.groupby(slice_keys, dropna=False):
+                ds, wl, nm, mem, psize, n = keys
+                # An (eb, budget) context is only meaningful where an approximate
+                # method ran there; an exact-only slice is covered under its own eb.
+                if not grp["method"].isin(
+                        ("a3i_akd", "akd_sampling", "a3i_grid_akd")).any():
+                    continue
+                sub = grp.set_index("method").reindex(
+                    [m for m in order if m in grp["method"].values]).reset_index()
+                print(f"\n=== {ds} / {wl}  (nm={nm}, eb={eb:g}, ob={ob:g}, "
+                      f"partition_size={psize}, mem={mem}, n={n}) ===")
+                print(f"  {'method':14}{'init_s':>8}{'cum_s':>9}{'reads':>15}"
+                      f"{'p50_ms':>9}{'p95_ms':>9}{'speedup':>8}{'scan%':>7}")
+                for _, r in sub.iterrows():
+                    sp = "" if r["speedup_vs_scan"] != r["speedup_vs_scan"] else f"{r['speedup_vs_scan']:.0f}x"
+                    # scan% = share of queries served through the sequential-scan
+                    # path; blank for an in-memory cell.
+                    scf = r.get("scan_frac", float("nan"))
+                    sc = "" if scf != scf else f"{scf*100:.0f}%"
+                    print(f"  {r['method']:14}{r['init_ms']/1e3:8.1f}{r['cum_ms']/1e3:9.1f}"
+                          f"{r['total_reads']:15,.0f}{r['lat_p50']:9.1f}{r['lat_p95']:9.1f}"
+                          f"{sp:>8}{sc:>7}")
+                fs = diagnostics(sub, eb, args.confidence, ds, ob)
+                vers = list(slice_versions.get(keys, []))
+                if len(vers) > 1:
+                    fs.append({"check": "single engine version",
+                               "status": "FAIL" if args.strict_version else "WARN",
+                               "detail": f"slice mixes engine builds {vers}"})
+                for f in fs:
+                    tot[f["status"]] += 1
+                    f.update(dataset=ds, workload=wl, nm=nm, mem=mem,
+                             partition_size=psize, n=n, eb=eb, outlier_budget=ob)
+                    all_findings.append(f)
+                    if f["status"] != "PASS":
+                        print(f"     [{f['status']}] {f['check']} "
+                              f"(nm={nm}, eb={eb:g}, ob={ob:g}): {f['detail']}")
 
     analysis_root.mkdir(parents=True, exist_ok=True)
     # Exact methods are evaluated in every eb's slice; keep one row per cell.
     summary = (pd.concat(summaries, ignore_index=True)
-               .drop_duplicates(subset=slice_keys + ["method", "eb"]))
+               .drop_duplicates(subset=slice_keys + ["method", "eb", "outlier_budget"]))
     # Lead with the cell identity, then the headline cost metrics, so the file
     # opens on what matters; any remaining columns keep their order at the end.
     lead = ["dataset", "workload", "method", "substrate", "nm", "mem",
-            "partition_size", "n", "eb",
+            "partition_size", "n", "eb", "outlier_budget",
             "init_ms", "cum_ms", "total_latency_ms",
             "lat_p50", "lat_p95", "lat_p99", "total_reads", "speedup_vs_scan"]
     ordered = [c for c in lead if c in summary.columns]
@@ -288,12 +302,13 @@ def main() -> int:
     # not an invariant. Compared across eb, so it runs once here, not per slice.
     approx = summary[summary["method"].isin(("a3i_akd", "akd_sampling"))
                      & summary["eb"].notna()]
-    for keys, grp in approx.groupby(slice_keys + ["method"], dropna=False):
+    for keys, grp in approx.groupby(slice_keys + ["method", "outlier_budget"],
+                                    dropna=False):
         g = grp.sort_values("eb")  # ascending eb = tighter -> looser
         rows = list(g[["eb", "total_reads"]].itertuples(index=False))
         for tight, loose in zip(rows, rows[1:]):
             if loose.total_reads > tight.total_reads:
-                ds, wl, nm, mem, psize, n, method = keys
+                ds, wl, nm, mem, psize, n, method, ob = keys
                 tot["WARN"] += 1
                 all_findings.append({
                     "check": "reads monotone in eb", "status": "WARN",
@@ -301,7 +316,8 @@ def main() -> int:
                                f"{loose.total_reads:,.0f} > eb={tight.eb:g} reads "
                                f"{tight.total_reads:,.0f} (looser bound read more)"),
                     "dataset": ds, "workload": wl, "nm": nm, "mem": mem,
-                    "partition_size": psize, "n": n, "eb": loose.eb})
+                    "partition_size": psize, "n": n, "outlier_budget": ob,
+                    "eb": loose.eb})
                 print(f"     [WARN] reads monotone in eb ({ds}/{wl} {method}): "
                       f"eb={loose.eb:g} {loose.total_reads:,.0f} > "
                       f"eb={tight.eb:g} {tight.total_reads:,.0f}")
@@ -309,8 +325,8 @@ def main() -> int:
     import csv as _csv
     with open(analysis_root / "findings.csv", "w", newline="") as fh:
         w = _csv.DictWriter(fh, fieldnames=["dataset", "workload", "nm", "mem",
-                                            "partition_size", "n", "eb", "check", "status",
-                                            "detail"])
+                                            "partition_size", "n", "eb", "outlier_budget",
+                                            "check", "status", "detail"])
         w.writeheader()
         w.writerows(all_findings)
 

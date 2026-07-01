@@ -40,6 +40,10 @@ APPROX = ("a3i_akd", "akd_sampling", "a3i_grid_akd")
 # are part of the (dataset, workload) facet identity, not within-facet axes.)
 PIN_DEFAULTS = {"eb": 0.01, "nm": 4, "partition_size": 1024, "mem": "INMEM"}
 
+# Per-dataset outlier budget the figures pin to (datasets absent
+# here fall back to "_default"). Replaceable with one global value for all datasets via the CLI (--outlier-budget).
+OUTLIER_BUDGET_PIN = {"ebird_us": 0.01, "_default": 0.0}
+
 # Optional cap on the per-query figure: show only the first N queries to zoom
 # into the convergence region. Default None -> the full run, so late adaptation
 # is never hidden; set via the CLI (--per-query-head) when a clean zoom is wanted
@@ -68,11 +72,29 @@ def _family(workload) -> str:
     return _FAMILY_RE.sub("", str(workload))
 
 
-def _facets(frame):
+def _resolve_budget(dataset):
+    """The outlier budget to pin for this dataset's facet (a global float when the
+    CLI overrode it, else the per-dataset map's value or its _default)."""
+    if isinstance(OUTLIER_BUDGET_PIN, (int, float)):
+        return float(OUTLIER_BUDGET_PIN)
+    return float(OUTLIER_BUDGET_PIN.get(str(dataset), OUTLIER_BUDGET_PIN["_default"]))
+
+
+def _facets(frame, pin_budget=True):
     """Yield (tag, title, subframe) per (dataset, workload). The title is just the
     workload (which already embeds the dataset name, so the dataset prefix would be
-    redundant and widen the title); the tag keeps both for the output filename."""
+    redundant and widen the title); the tag keeps both for the output filename.
+
+    Unless `pin_budget=False` (e.g. a budget sweep), each facet is pinned to its
+    dataset's outlier budget (OUTLIER_BUDGET_PIN; exact methods carry a NaN budget
+    and join every budget, like eb), so a comparison draws one a3i per dataset
+    rather than one per budget present in the folder."""
     for (dataset, workload), sub in frame.groupby(["dataset", "workload"], dropna=False):
+        if pin_budget and "outlier_budget" in sub.columns:
+            b = _resolve_budget(dataset)
+            sub = sub[sub["outlier_budget"].isna() | (sub["outlier_budget"] == b)]
+            if sub.empty:
+                continue
         yield f"{dataset}__{workload}", str(workload), sub
 
 

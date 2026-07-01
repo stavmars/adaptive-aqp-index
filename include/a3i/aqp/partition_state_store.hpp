@@ -63,6 +63,12 @@ public:
     /// Fold one round of newly sampled rows into an existing summary.
     void update_sampled(PartitionId id, MeasureId mid, const SampleDelta& delta);
 
+    /// Bank a partition's held-out rows' exact contribution for one measure and
+    /// mark the partition's outliers materialized, so a later containing query
+    /// reuses them without re-reading. Kept separate from the sampled moments.
+    void bank_outliers(PartitionId id, MeasureId mid, double sum,
+                       std::uint64_t count);
+
     /// Overwrite a summary with a completed (exact) one.
     void replace_with_complete(PartitionId id, MeasureId mid,
                                MeasureSummary summary);

@@ -37,7 +37,7 @@ constexpr const char* kHeader =
     "query_ordinal,method,substrate,dataset,workload,query_rect,aggregates,"
     "target_satisfied,status,exactify_cause,pre_exactification_error_bound,"
     "sampling_seed,latency_ms,measure_reads,sampled_rows,"
-    "exactified_rows,frontier_partitions,partitions_refined,exact_contributors,"
+    "exactified_rows,outlier_rows,frontier_partitions,partitions_refined,exact_contributors,"
     "reusable_sampled_strata,reusable_absent_strata,query_local_strata,"
     "adaptive_rounds,scan_path_rows,gather_path_rows,"
     "scan_bytes_read,gather_bytes_read,round_paths";
@@ -239,7 +239,7 @@ void write_row(std::ofstream& out, std::uint64_t ordinal, const std::string& met
         << m.exactify_cause << ',' << fmt(m.pre_exactification_error_bound) << ','
         << m.sampling_seed << ',' << fmt(m.latency_ms) << ','
         << m.measure_reads << ',' << m.sampled_rows << ','
-        << m.exactified_rows << ',' << m.frontier_partitions << ','
+        << m.exactified_rows << ',' << m.outlier_rows << ',' << m.frontier_partitions << ','
         << m.partitions_refined << ',' << m.exact_contributors << ','
         << m.reusable_sampled_strata << ',' << m.reusable_absent_strata << ','
         << m.query_local_strata << ',' << m.adaptive_rounds << ','
@@ -358,6 +358,7 @@ CellReport run_cell(const CellConfig& config) {
         substrate->prepare(*table);
         EngineConfig ecfg = behavior_config(spec.behavior);
         ecfg.sort_gather_by_row_id = config.sort_gather_by_row_id;
+        ecfg.outlier_budget_fraction = config.outlier_budget_fraction;
         engine = std::make_unique<QueryEngine>(store, *table, *substrate,
                                                std::move(ecfg));
         // Build (and, for aggregating behaviors, precompute summaries) up front
@@ -410,6 +411,7 @@ CellReport run_cell(const CellConfig& config) {
         meta["partitions_per_dimension"] = config.partitions_per_dimension;
         meta["stochastic_cracking"]  = config.stochastic_cracking;
         meta["sort_gather_by_row_id"] = config.sort_gather_by_row_id;
+        meta["outlier_budget_fraction"] = config.outlier_budget_fraction;
         meta["measure_storage"]      =
             config.measure_storage == MeasureStorage::Eager ? "eager" : "ondisk";
         meta["run_id"]               = config.run_id;

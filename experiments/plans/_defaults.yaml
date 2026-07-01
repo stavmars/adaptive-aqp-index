@@ -36,6 +36,10 @@ nm: [4]
 eb: [0.01]
 partition_size: [1024]
 partitions_per_dimension: 200
+outlier_budget: [0.0]
+outlier_budget_by_workload:
+  ebird_us_random:    [0.01]
+  ebird_us_clustered: [0.01]
 mem: [inmem]
 run_id: [0]
 run_id_by_method:

@@ -117,10 +117,11 @@ struct QueryMetrics {
     double        latency_ms = 0.0;
 
     // --- Read-work counters --------------------------------------------------
-    // Sampling and exactification draw disjoint rows (without-replacement
-    // sampling never re-reads a row), so they are counted separately and the
+    // Sampling, exactification, and outlier banking draw disjoint rows
+    // (without-replacement sampling never re-reads a row; held-out outlier rows
+    // are excluded from the sample), so they are counted separately and the
     // following identity holds for every method:
-    //   measure_reads == (sampled_rows + exactified_rows) * measure_count.
+    //   measure_reads == (sampled_rows + exactified_rows + outlier_rows) * measure_count.
     /// Total measure values gathered by row id (rows x measures): the I/O cost.
     std::uint64_t measure_reads    = 0;
     /// Distinct rows read by without-replacement sampling (tightening rounds).
@@ -128,6 +129,10 @@ struct QueryMetrics {
     /// Distinct rows read by exhausting a stratum to exact (selective
     /// exactification; for the scan oracle, every qualifying row).
     std::uint64_t exactified_rows  = 0;
+    /// Distinct held-out (outlier-index) rows read once and banked exactly,
+    /// kept separate from exactified_rows so outlier-bank I/O is distinguishable
+    /// from body give-up reads. 0 unless the outlier index is active.
+    std::uint64_t outlier_rows     = 0;
 
     // --- Access-path split (on-disk only) ------------------------------------
     // How the WANTED rows were fetched from disk, chosen per batch by the

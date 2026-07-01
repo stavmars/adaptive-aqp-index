@@ -32,9 +32,9 @@ EXPECTED_HEADER = (
     "query_ordinal,method,substrate,dataset,workload,query_rect,aggregates,"
     "target_satisfied,status,exactify_cause,pre_exactification_error_bound,"
     "sampling_seed,latency_ms,measure_reads,sampled_rows,"
-    "exactified_rows,frontier_partitions,partitions_refined,exact_contributors,"
-    "reusable_sampled_strata,reusable_absent_strata,query_local_strata,"
-    "adaptive_rounds,scan_path_rows,gather_path_rows,"
+    "exactified_rows,outlier_rows,frontier_partitions,partitions_refined,"
+    "exact_contributors,reusable_sampled_strata,reusable_absent_strata,"
+    "query_local_strata,adaptive_rounds,scan_path_rows,gather_path_rows,"
     "scan_bytes_read,gather_bytes_read,round_paths"
 ).split(",")
 
@@ -56,7 +56,7 @@ COST_COLS = ("latency_ms", "measure_reads", "sampled_rows", "exactified_rows",
 # Cell identity (one cell-run = one qresults file). `n` (query count) is part of
 # identity so runs with different `max_queries` are distinct cells, not pooled.
 CELL_KEYS = ("dataset", "workload", "method", "substrate",
-             "nm", "mem", "partition_size", "n", "eb", "run_id")
+             "nm", "mem", "partition_size", "n", "eb", "outlier_budget", "run_id")
 
 
 class LoadError(Exception):
@@ -133,9 +133,18 @@ def _cell_rows(qpath: Path) -> list[dict]:
     ax = _parse_axes(m.group("key"))
     run_id = int(m.group("run"))
 
+    # The outlier budget applies only to approximate (sampling) runs. Exact runs
+    # carry no error bound (eb is None), and the budget is meaningless for them,
+    # so they get NaN, this lets one exact run join every budget
+    # slice as the baseline (see analyze_results.py) instead of sitting only in
+    # the budget-0 slice.
+    outlier_budget = (float(meta.get("outlier_budget_fraction", 0.0))
+                      if ax["eb"] is not None else float("nan"))
     ident = dict(dataset=dataset, workload=workload, method=method,
                  substrate=substrate, nm=ax["nm"], mem=ax["mem"],
-                 partition_size=ax["partition_size"], n=ax["n"], eb=ax["eb"], run_id=run_id,
+                 partition_size=ax["partition_size"], n=ax["n"], eb=ax["eb"],
+                 outlier_budget=outlier_budget,
+                 run_id=run_id,
                  init_ms=float(meta.get("init_ms", 0.0)),
                  cold=bool(meta.get("cold")),
                  measure_storage=meta.get("measure_storage"),

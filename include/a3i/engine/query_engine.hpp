@@ -32,6 +32,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -47,6 +48,8 @@
 
 namespace a3i {
 
+class OutlierScorer;
+
 struct EngineConfig {
     enum class AccuracyMode { PerQuery, ForceExact };
     AccuracyMode accuracy_mode = AccuracyMode::PerQuery;
@@ -59,6 +62,11 @@ struct EngineConfig {
     // the column is resident and the read is sparse. A global toggle, not a
     // per-query heuristic.
     bool         sort_gather_by_row_id = true;
+    // Fraction of rows to hold in the outlier index that isolates the
+    // heaviest-tail rows from the sampled body (0 disables it entirely: no
+    // index is built and the read path is unchanged). Applies to the sampling
+    // behaviors only.
+    double       outlier_budget_fraction = 0.0;
     AllocatorConfig allocator;
 };
 
@@ -90,6 +98,7 @@ private:
         IndexPos      begin = 0;
         std::uint32_t size = 0;
         const PositionBitset* qualifying = nullptr;  // query-local only
+        const PositionBitset* excluded = nullptr;    // held-out positions (reusable only)
         std::uint64_t N = 0;
         std::shared_ptr<SampleTracker> tracker;
     };
@@ -119,15 +128,25 @@ private:
     // the full residual (the terminal exactify) never escalates.
     bool read_round(const std::vector<std::uint64_t>& targets,
                     std::uint64_t ordinal, std::uint64_t round,
-                    QueryMetrics& metrics);
+                    QueryMetrics& metrics, ExactBucket& exact_bucket);
     // Read every residual stratum to completion (target == population), so the
     // remaining rows are read once and the residual variance collapses to zero.
     void exactify_round(std::uint64_t ordinal, std::uint64_t round,
-                        QueryMetrics& metrics);
+                        QueryMetrics& metrics, ExactBucket& exact_bucket);
     StratumSample sample_for(const ResidualPartition& p, MeasureId mid) const;
     std::uint64_t sampled_count(const ResidualPartition& p) const;
     bool all_satisfied(const std::vector<AggregateEstimate>& est,
                        double rel) const;
+
+    // Build the outlier-index scorer from the exact per-measure statistics
+    // and the configured budget; null when the budget is zero (the index is
+    // disabled). When eager materialization runs it feeds the scorer for free;
+    // otherwise the scorer is fed by a dedicated streaming pass.
+    std::unique_ptr<OutlierScorer> make_scorer() const;
+    void run_scoring_sweep(OutlierScorer& scorer) const;
+    // Gather the decomposition's add-back rows and fold their values into the
+    // exact bucket, so the held-out rows contribute exactly.
+    void apply_addback(DecompositionResult& d, QueryMetrics& metrics) const;
 
     const BinaryColumnStore& store_;
     IndexTable&              table_;

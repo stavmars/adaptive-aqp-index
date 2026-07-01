@@ -56,9 +56,10 @@ StratumCursor make_reusable_sampled_cursor(const IndexTable& table,
                                            IndexPos begin, std::uint64_t size,
                                            SampleTracker& tracker,
                                            std::uint64_t count, Rng& rng,
-                                           StratumTag tag, bool sort_owned) {
+                                           StratumTag tag, bool sort_owned,
+                                           const PositionBitset* excluded) {
     std::vector<IndexPos> positions =
-        Sampler::draw({size, /*qualifying=*/nullptr}, tracker, count, rng);
+        Sampler::draw({size, /*qualifying=*/nullptr, excluded}, tracker, count, rng);
     mark_all(tracker, positions);
     return build_cursor(table, begin, positions, tag, sort_owned);
 }
@@ -83,6 +84,20 @@ StratumCursor make_query_local_sampled_cursor(
     return build_cursor(table, begin, positions, tag, sort_owned);
 }
 
+StratumCursor make_outlier_cursor(const IndexTable& table, IndexPos begin,
+                                  std::uint64_t size, StratumTag tag,
+                                  bool sort_owned) {
+    std::vector<IndexPos> positions;
+    table.for_each_flagged_in_range(
+        begin, static_cast<IndexPos>(begin + size),
+        [&](IndexPos pos) {
+            positions.push_back(static_cast<IndexPos>(pos - begin));
+        });
+    StratumCursor c = build_cursor(table, begin, positions, tag, sort_owned);
+    c.is_outlier = true;
+    return c;
+}
+
 KWayMerge::KWayMerge(std::span<StratumCursor> cursors) {
     heap_.reserve(cursors.size());
     for (StratumCursor& c : cursors) {
@@ -92,8 +107,10 @@ KWayMerge::KWayMerge(std::span<StratumCursor> cursors) {
 }
 
 std::size_t KWayMerge::next_chunk(std::span<RowId> ids_out,
-                                  std::span<StratumTag> tags_out) {
+                                  std::span<StratumTag> tags_out,
+                                  std::span<char> is_outlier_out) {
     assert(ids_out.size() == tags_out.size());
+    assert(is_outlier_out.empty() || is_outlier_out.size() == ids_out.size());
     const std::size_t cap = ids_out.size();
     std::size_t n = 0;
     while (n < cap && !heap_.empty()) {
@@ -101,6 +118,7 @@ std::size_t KWayMerge::next_chunk(std::span<RowId> ids_out,
         StratumCursor* c = heap_.back();
         ids_out[n] = c->peek();
         tags_out[n] = c->tag;
+        if (!is_outlier_out.empty()) is_outlier_out[n] = c->is_outlier ? 1 : 0;
         ++n;
         c->advance();
         if (c->done()) {

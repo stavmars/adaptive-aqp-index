@@ -23,20 +23,26 @@ std::vector<IndexPos> partial_shuffle(std::vector<IndexPos> eligible,
     return eligible;
 }
 
-/// List the eligible positions (in the universe, not yet in the tracker).
+/// List the eligible positions (in the universe, not yet in the tracker, not
+/// blocked).
 std::vector<IndexPos> enumerate_eligible(EligibleUniverse universe,
                                          const SampleTracker& tracker) {
     std::vector<IndexPos> eligible;
+    const PositionBitset* blocked = universe.blocked;
     if (universe.qualifying != nullptr) {
         eligible.reserve(static_cast<std::size_t>(universe.qualifying->count()));
         universe.qualifying->for_each_set([&](IndexPos pos) {
-            if (!tracker.contains(pos)) eligible.push_back(pos);
+            if (tracker.contains(pos)) return;
+            if (blocked != nullptr && blocked->contains(pos)) return;
+            eligible.push_back(pos);
         });
     } else {
         eligible.reserve(static_cast<std::size_t>(universe.size));
         for (std::uint64_t p = 0; p < universe.size; ++p) {
             const auto pos = static_cast<IndexPos>(p);
-            if (!tracker.contains(pos)) eligible.push_back(pos);
+            if (tracker.contains(pos)) continue;
+            if (blocked != nullptr && blocked->contains(pos)) continue;
+            eligible.push_back(pos);
         }
     }
     return eligible;
@@ -60,6 +66,9 @@ std::vector<IndexPos> reject_sample(EligibleUniverse universe,
             !universe.qualifying->contains(pos)) {
             continue;
         }
+        if (universe.blocked != nullptr && universe.blocked->contains(pos)) {
+            continue;
+        }
         if (tracker.contains(pos)) continue;
         if (!chosen.insert(pos).second) continue;
         picked.push_back(pos);
@@ -75,22 +84,27 @@ std::vector<IndexPos> Sampler::draw(EligibleUniverse universe,
     const std::uint64_t universe_total = universe.qualifying != nullptr
                                              ? universe.qualifying->count()
                                              : universe.size;
+    const std::uint64_t blocked_count =
+        universe.blocked != nullptr ? universe.blocked->count() : 0;
+    const std::uint64_t available =
+        universe_total > blocked_count ? universe_total - blocked_count : 0;
     const std::uint64_t taken = tracker.count();
     const std::uint64_t eligible_count =
-        universe_total > taken ? universe_total - taken : 0;
+        available > taken ? available - taken : 0;
     if (count > eligible_count) count = eligible_count;
     if (count == 0) return {};
 
     // Rejection pays off only when few proposals are wasted: the draw is a
-    // small slice of the eligible set, the tracker is sparse, and (for a
-    // narrowed universe) the qualifying set is dense in [0, size). Otherwise
-    // enumerate, where work is bounded by the eligible population.
-    const bool small_draw     = count * 2 <= eligible_count;
-    const bool sparse_tracker = taken * 2 <= universe_total;
+    // small slice of the eligible set, the excluded set (tracker plus blocked)
+    // is sparse, and (for a narrowed universe) the qualifying set is dense in
+    // [0, size). Otherwise enumerate, where work is bounded by the eligible
+    // population.
+    const bool small_draw      = count * 2 <= eligible_count;
+    const bool sparse_excluded = (taken + blocked_count) * 2 <= universe_total;
     const bool dense_qualifying =
         universe.qualifying == nullptr ||
         universe.qualifying->count() * 2 >= universe.size;
-    if (small_draw && sparse_tracker && dense_qualifying) {
+    if (small_draw && sparse_excluded && dense_qualifying) {
         return reject_sample(universe, tracker, count, rng);
     }
     return partial_shuffle(enumerate_eligible(universe, tracker), count, rng);

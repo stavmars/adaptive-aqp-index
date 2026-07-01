@@ -68,7 +68,8 @@ WORKLOAD_CONFIG_DIR = REPO_ROOT / "configs" / "workloads"
 
 AXIS_KEYS = ("runs", "workloads", "nm", "eb", "partition_size", "mem", "run_id",
              "run_id_by_method", "max_queries", "confidence",
-             "partitions_per_dimension")
+             "partitions_per_dimension", "outlier_budget",
+             "outlier_budget_by_workload")
 
 # Holds the single-instance flock for the process lifetime (see main()).
 _instance_lock = None
@@ -249,7 +250,7 @@ def mem_bytes(mem: str) -> int | None:
 
 
 def cell_key(nm: int, mem: str, psize: int, q: int, eb: float, approx: bool,
-             ppd: int = 1) -> str:
+             ppd: int = 1, outlier: float = 0.0) -> str:
     parts = [f"mcols{nm}", f"mem{mem_tag(mem)}", f"ps{psize}", f"n{q}"]
     if approx:
         parts.append(f"err{eb:g}")
@@ -257,6 +258,10 @@ def cell_key(nm: int, mem: str, psize: int, q: int, eb: float, approx: bool,
     # cells are distinct without changing any other method's key.
     if ppd != 1:
         parts.append(f"ppd{ppd}")
+    # Tag the outlier-index budget only when it is on, so a budget of 0 keeps
+    # the historical key (and result files) unchanged for backwards compatibility.
+    if approx and outlier and outlier > 0:
+        parts.append(f"ob{outlier:g}")
     return "_".join(sorted(parts))
 
 
@@ -306,7 +311,7 @@ def workload_query_count(csv_path: Path) -> int:
 class Cell:
     __slots__ = ("method", "substrate", "dataset", "workload", "nm", "eb",
                  "psize", "mem", "run_id", "max_queries", "confidence",
-                 "approx", "key", "qcount", "ppd")
+                 "approx", "key", "qcount", "ppd", "outlier")
 
     def __init__(self, **kw):
         for k, v in kw.items():
@@ -328,6 +333,15 @@ def enumerate_cells(plan: dict, catalog: dict, prepared_root: Path,
     for m in per_method_runs:
         if m not in run_substrate:
             sys.exit(f"run_id_by_method names unknown method '{m}'")
+
+    # Per-workload outlier-budget override: a listed workload uses its own budget
+    # list; any other workload falls back to the plan's `outlier_budget`. Applies
+    # to approximate runs only. (Lets the heavy-tail dataset carry the index while
+    # the rest stay off -- the manual stand-in for a future activation screen.)
+    ob_by_workload = plan.get("outlier_budget_by_workload") or {}
+    for w in ob_by_workload:
+        if w not in catalog:
+            sys.exit(f"outlier_budget_by_workload names unknown workload '{w}'")
 
     for wid in plan["workloads"]:
         if wid not in catalog:
@@ -364,19 +378,28 @@ def enumerate_cells(plan: dict, catalog: dict, prepared_root: Path,
                         for run_id in run_ids:
                             mq = plan["max_queries"]
                             qcount = qcounts[wid] if mq in (None, 0) else min(mq, qcounts[wid])
-                            # Approximate runs fan out over eb; exact runs emit
-                            # once with no err component in the key.
+                            # Approximate runs fan out over eb and the deviation
+                            # budget; exact runs emit once with no err/budget
+                            # component in the key.
                             eb_values = plan["eb"] if approx else [None]
+                            # Default to off when a plan predates this axis, so
+                            # existing plans keep their historical cell set. A
+                            # per-workload override wins over the global budget.
+                            ob_values = (
+                                ob_by_workload.get(wid, plan.get("outlier_budget", [0.0]))
+                                if approx else [0.0])
                             for eb in eb_values:
-                                key = cell_key(nm, mem, psize, qcount,
-                                               eb if eb is not None else 0.0, approx,
-                                               ppd)
-                                cells.append(Cell(
-                                    method=method, substrate=substrate,
-                                    dataset=dataset, workload=wid, nm=nm,
-                                    eb=eb, psize=psize, mem=mem, run_id=run_id,
-                                    max_queries=mq, confidence=plan["confidence"],
-                                    approx=approx, key=key, qcount=qcount, ppd=ppd))
+                                for ob in ob_values:
+                                    key = cell_key(nm, mem, psize, qcount,
+                                                   eb if eb is not None else 0.0,
+                                                   approx, ppd, ob)
+                                    cells.append(Cell(
+                                        method=method, substrate=substrate,
+                                        dataset=dataset, workload=wid, nm=nm,
+                                        eb=eb, psize=psize, mem=mem, run_id=run_id,
+                                        max_queries=mq, confidence=plan["confidence"],
+                                        approx=approx, key=key, qcount=qcount,
+                                        ppd=ppd, outlier=ob))
     return cells
 
 
@@ -492,6 +515,10 @@ def run_cell(a3i_run: Path, cell: Cell, manifest: Path, workload_csv: Path,
            "--cold", "true" if cold else "false"]
     if cell.eb is not None:
         cmd += ["--error-bound", repr(float(cell.eb))]
+    # Only pass the budget when it is on; a zero budget keeps the command (and so
+    # the engine behavior) identical to a pre-feature run.
+    if getattr(cell, "outlier", 0.0) and cell.outlier > 0:
+        cmd += ["--outlier-budget", repr(float(cell.outlier))]
     if cell.max_queries not in (None, 0):
         cmd += ["--max-queries", str(cell.max_queries)]
 

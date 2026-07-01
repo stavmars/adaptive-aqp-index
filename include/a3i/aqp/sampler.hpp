@@ -40,9 +40,13 @@ namespace a3i {
 /// The set a draw samples from: positions [0, size), narrowed to `qualifying`
 /// when non-null. A null `qualifying` means every position qualifies (a
 /// fully-contained partition), so no candidate list is needed at all.
+/// `blocked`, when non-null, removes a (typically sparse) subset of positions
+/// from the universe in addition to the tracker -- positions that are part of
+/// the population but must never be drawn.
 struct EligibleUniverse {
     std::uint64_t         size       = 0;
     const PositionBitset* qualifying = nullptr;
+    const PositionBitset* blocked    = nullptr;
 };
 
 struct Sampler {

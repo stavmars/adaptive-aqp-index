@@ -78,15 +78,31 @@ struct SampleDelta {
 ///   exact   -> sampled_rows >= population_size (> 0)
 struct MeasureSummary {
     std::uint64_t population_size = 0;  // objects in the partition, incl. missing
-    std::uint64_t sampled_rows    = 0;  // rows drawn for this measure, incl. missing
+    std::uint64_t sampled_rows    = 0;  // body rows drawn (never incl. held-out rows)
     MomentStats   non_nan;              // moments over the non-missing sampled values
     std::shared_ptr<SampleTracker> tracker;  // shared across the partition's measures
 
+    // Held-out rows banked exactly. These rows are excluded from the sample, so
+    // their values are kept here, separate from non_nan, and the body's
+    // sampled_rows/population accounting works against the body only
+    // (population_size - outlier_rows). outlier_rows and outliers_materialized
+    // are partition-wide facts replicated onto each measure slot, like
+    // population_size; outlier_sum/outlier_count are per-measure. Zero/false on
+    // every path that holds nothing out (including a fully materialized summary
+    // whose held-out rows are already inside non_nan, which leaves outlier_rows
+    // at 0).
+    double        outlier_sum   = 0.0;
+    std::uint64_t outlier_count = 0;
+    std::uint64_t outlier_rows  = 0;
+    bool          outliers_materialized = false;
+
     bool sampled() const noexcept {
-        return sampled_rows > 0 && sampled_rows < population_size;
+        return sampled_rows > 0 && sampled_rows < population_size - outlier_rows;
     }
     bool complete() const noexcept {
-        return population_size > 0 && sampled_rows >= population_size;
+        return population_size > 0
+            && sampled_rows >= population_size - outlier_rows
+            && (outlier_rows == 0 || outliers_materialized);
     }
 };
 

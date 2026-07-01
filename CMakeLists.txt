@@ -63,6 +63,7 @@ add_library(a3i_core STATIC
     src/aqp/decompose.cpp
     src/aqp/eager_materialize.cpp
     src/aqp/estimator.cpp
+    src/aqp/outlier_scorer.cpp
     src/aqp/allocator.cpp
     src/engine/query_engine.cpp
     src/engine/method.cpp

@@ -34,6 +34,8 @@
 
 namespace a3i {
 
+class OutlierScorer;
+
 /// Fill an exact, complete summary for every active partition of `access_path`
 /// and for every parent partition above them into `state`. `table` provides the
 /// row id at each position; `store` provides the measure values. Each of the
@@ -43,11 +45,16 @@ namespace a3i {
 /// `owner`, when non-null, supplies the RowId -> active-partition map directly
 /// (size must equal table.size()), skipping its derivation from the partition
 /// ranges; when null the map is built by walking those ranges.
+///
+/// `scorer`, when non-null, is fed every row's measure values during the single
+/// column sweep, so the outlier index is built from the same reads with no
+/// extra pass.
 void materialize_all_summaries(const AdaptiveAccessPath& access_path,
                                const IndexTable& table,
                                const BinaryColumnStore& store,
                                PartitionStateStore& state,
                                std::size_t measure_count,
-                               const std::vector<PartitionId>* owner = nullptr);
+                               const std::vector<PartitionId>* owner = nullptr,
+                               OutlierScorer* scorer = nullptr);
 
 }  // namespace a3i

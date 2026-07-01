@@ -108,6 +108,18 @@ void PartitionStateStore::update_sampled(PartitionId id, MeasureId mid,
     s.non_nan.merge(delta.moments);
 }
 
+void PartitionStateStore::bank_outliers(PartitionId id, MeasureId mid,
+                                        double sum, std::uint64_t count) {
+    auto& st = state(id);
+    if (mid >= st.summaries_by_measure.size() || !st.summaries_by_measure[mid]) {
+        throw std::logic_error("PartitionStateStore::bank_outliers missing summary");
+    }
+    MeasureSummary& s = *st.summaries_by_measure[mid];
+    s.outlier_sum += sum;
+    s.outlier_count += count;
+    s.outliers_materialized = true;
+}
+
 void PartitionStateStore::replace_with_complete(PartitionId id, MeasureId mid,
                                                 MeasureSummary summary) {
     auto& st = state(id);

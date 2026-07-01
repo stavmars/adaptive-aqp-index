@@ -289,6 +289,7 @@ def validate_run(csv_path: Path, oracles: dict[int, Oracle],
     substrate = runmeta.get("substrate", csv_path.parents[1].name)
     eb = float(runmeta.get("error_bound", 0.0) or 0.0)
     conf = float(runmeta.get("confidence", 0.0) or 0.0)
+    budget = float(runmeta.get("outlier_budget_fraction", 0.0) or 0.0)
     nm = int(runmeta["num_measures"])
     if nm not in oracles:
         sys.exit(f"no scan oracle with num_measures={nm} for {csv_path}")
@@ -403,19 +404,32 @@ def validate_run(csv_path: Path, oracles: dict[int, Oracle],
                             "kind": "exact_consistency", "ok": False,
                             "note": f"status={status} but an aggregate is not exact"})
 
-        # Τhe read-work counters must obey their identity. Sampling and
-        # exactification read disjoint rows, every read touches every measure,
-        # so measure_reads == (sampled_rows + exactified_rows) * num_measures.
+        # Τhe read-work counters must obey their identity. Sampling,
+        # exactification, and held-out (outlier) reads touch disjoint rows, and
+        # every read touches every measure, so
+        # measure_reads == (sampled_rows + exactified_rows + outlier_rows) * num_measures.
+        # (outlier_rows is absent on results predating the outlier index -> 0.)
         # A violation means the counters are wired wrong.
         sampled = int(as_float(row.get("sampled_rows", 0)))
         exactified = int(as_float(row.get("exactified_rows", 0)))
+        outlier = int(as_float(row.get("outlier_rows", 0)))
         measure_reads = int(as_float(row.get("measure_reads", 0)))
-        if measure_reads != (sampled + exactified) * nm:
+        if measure_reads != (sampled + exactified + outlier) * nm:
             guard_fail += 1
             details.append({"query_ordinal": ordinal, "aggregate": "", "measure": "",
                             "kind": "read_counters", "ok": False,
-                            "note": (f"measure_reads={measure_reads} != "
-                                     f"(sampled={sampled}+exactified={exactified})*nm={nm}")})
+                            "note": (f"measure_reads={measure_reads} != (sampled={sampled}"
+                                     f"+exactified={exactified}+outlier={outlier})*nm={nm}")})
+
+        # Disabled-path inertness: with no budget the outlier index is never built,
+        # so it must do zero held-out work on every query. A non-zero count here
+        # means the off path is not truly inert.
+        if budget == 0.0 and outlier != 0:
+            guard_fail += 1
+            details.append({"query_ordinal": ordinal, "aggregate": "", "measure": "",
+                            "kind": "outlier_disabled", "ok": False,
+                            "note": f"outlier_rows={outlier} with outlier budget 0 "
+                                    "(index should be off)"})
 
         # Gate: the per-partition frontier breakdown must sum to the frontier.
         frontier = int(as_float(row.get("frontier_partitions", 0)))

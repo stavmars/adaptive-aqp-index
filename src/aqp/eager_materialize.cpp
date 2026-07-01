@@ -5,6 +5,7 @@
 #include <span>
 #include <vector>
 
+#include "a3i/aqp/outlier_scorer.hpp"
 #include "a3i/aqp/summary.hpp"
 
 namespace a3i {
@@ -14,7 +15,8 @@ void materialize_all_summaries(const AdaptiveAccessPath& access_path,
                                const BinaryColumnStore& store,
                                PartitionStateStore& state,
                                std::size_t measure_count,
-                               const std::vector<PartitionId>* owner_in) {
+                               const std::vector<PartitionId>* owner_in,
+                               OutlierScorer* scorer) {
     const std::vector<PartitionId> active = access_path.active_partitions();
     if (active.empty() || measure_count == 0) return;
 
@@ -68,6 +70,9 @@ void materialize_all_summaries(const AdaptiveAccessPath& access_path,
     for (std::size_t mid = 0; mid < k; ++mid) {
         store.advise_sequential(static_cast<MeasureId>(mid));
     }
+    // Scratch holding one row's measure values, reused per row to feed the
+    // scorer without per-row allocation.
+    std::vector<double> row_vals(scorer != nullptr ? k : 0);
     for (std::size_t block = 0; block < n; block += kBlockRows) {
         const std::size_t count = std::min(kBlockRows, n - block);
         for (std::size_t mid = 0; mid < k; ++mid) {
@@ -80,6 +85,10 @@ void materialize_all_summaries(const AdaptiveAccessPath& access_path,
             MomentStats* row_acc = &acc[static_cast<std::size_t>(owner[r]) * k];
             for (std::size_t mid = 0; mid < k; ++mid) {
                 row_acc[mid].add_if_present(cols[mid][i]);
+            }
+            if (scorer != nullptr) {
+                for (std::size_t mid = 0; mid < k; ++mid) row_vals[mid] = cols[mid][i];
+                scorer->observe(r, row_vals);
             }
         }
     }
@@ -95,6 +104,10 @@ void materialize_all_summaries(const AdaptiveAccessPath& access_path,
             MeasureSummary& s = state.get_or_create(id, m, pop);
             s.sampled_rows = pop;
             s.non_nan = acc[static_cast<std::size_t>(id) * k + mid];
+            // Materialized summaries already fold every row (including flagged
+            // ones) into non_nan, so nothing is held out here.
+            s.outlier_rows = 0;
+            s.outliers_materialized = true;
         }
     }
 
@@ -131,6 +144,8 @@ void materialize_all_summaries(const AdaptiveAccessPath& access_path,
             MeasureSummary& s = state.get_or_create(pid, m, pop);
             s.sampled_rows = pop;
             s.non_nan = parent_acc[id * k + mid];
+            s.outlier_rows = 0;
+            s.outliers_materialized = true;
         }
     }
 }

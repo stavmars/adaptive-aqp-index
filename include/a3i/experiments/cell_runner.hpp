@@ -66,6 +66,10 @@ struct CellConfig {
     /// different gather orders are never silently aggregated or compared.
     bool          sort_gather_by_row_id = true;
 
+    /// Fraction of rows held in the outlier index (0 disables it; applies to
+    /// the sampling methods only). Recorded in the sidecar.
+    double        outlier_budget_fraction = 0.0;
+
     /// How the measure columns are backed: OnDisk (out-of-core, the default)
     /// or Eager (loaded fully resident, the in-memory regime). The
     /// orchestrator derives this from the `mem` axis (`inmem` => Eager); it is
